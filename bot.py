@@ -884,7 +884,7 @@ def format_transcript(guild_name: str, channel_name: str, closed_at: str, messag
     <div class="logo">FightLab.net · Transcript</div>
     <h1>{html_mod.escape(channel_name)}</h1>
     <div class="meta">
-      <span>🏰 {html_mod.escape(guild_name)}</span>
+      <span>{html_mod.escape(guild_name)}</span>
       <span>🕓 Closed {html_mod.escape(closed_at)}</span>
       <span>💬 {len(messages)} messages</span>
     </div>
