@@ -4,6 +4,7 @@ import json
 import os
 import re
 import secrets
+import time
 from datetime import datetime, timedelta, timezone
 
 import discord
@@ -46,6 +47,18 @@ invites_data: dict = {"invites": {}, "invite_cache": {}, "members": {}}
 TICKET_DATA_FILE = os.path.join(DATA_DIR, "tickets_data.json")
 tickets_data: dict = {"counter": 0, "tickets": {}, "settings": {}}
 panel_selections: dict[tuple[int, int], str] = {}
+
+BUGS_DATA_FILE = os.path.join(DATA_DIR, "bugs_data.json")
+bugs_data: dict = {"counter": 0, "bugs": []}
+REPORTS_DATA_FILE = os.path.join(DATA_DIR, "reports_data.json")
+reports_data: dict = {"counter": 0, "reports": []}
+
+ANTISPAM_WINDOW = 5.0
+ANTISPAM_MAX_MESSAGES = 5
+ANTISPAM_DUPES = 3
+ANTISPAM_WARN_COOLDOWN = 60.0
+spam_state: dict[int, list[tuple[float, str]]] = {}
+last_spam_warn: dict[int, float] = {}
 
 LANGUAGES = {
     "de": "Deutsch",
@@ -383,6 +396,34 @@ def load_ticket_data():
 def save_ticket_data():
     with open(TICKET_DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(tickets_data, f, indent=2, ensure_ascii=False)
+
+
+def load_bugs_data():
+    global bugs_data
+    if os.path.exists(BUGS_DATA_FILE):
+        with open(BUGS_DATA_FILE, "r", encoding="utf-8") as f:
+            bugs_data = json.load(f)
+    bugs_data.setdefault("counter", 0)
+    bugs_data.setdefault("bugs", [])
+
+
+def save_bugs_data():
+    with open(BUGS_DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(bugs_data, f, indent=2, ensure_ascii=False)
+
+
+def load_reports_data():
+    global reports_data
+    if os.path.exists(REPORTS_DATA_FILE):
+        with open(REPORTS_DATA_FILE, "r", encoding="utf-8") as f:
+            reports_data = json.load(f)
+    reports_data.setdefault("counter", 0)
+    reports_data.setdefault("reports", [])
+
+
+def save_reports_data():
+    with open(REPORTS_DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(reports_data, f, indent=2, ensure_ascii=False)
 
 
 def get_ticket(channel_id) -> dict | None:
@@ -1445,10 +1486,233 @@ async def ticketpanel(
     save_ticket_data()
 
 
+@bot.slash_command(
+    name="bug",
+    description="Reports a bug",
+)
+async def bug(
+    ctx: discord.ApplicationContext,
+    bug: discord.Option(
+        str,
+        description="Describe the bug",
+        required=True,
+        max_length=1000,
+    ),
+):
+    load_bugs_data()
+    bugs_data["counter"] += 1
+    bug_id = bugs_data["counter"]
+    bugs_data["bugs"].append(
+        {
+            "id": bug_id,
+            "author_id": str(ctx.author.id),
+            "author_name": ctx.author.display_name,
+            "content": bug,
+            "created_at": now_iso(),
+            "status": "open",
+        }
+    )
+    save_bugs_data()
+    embed = (
+        discord.Embed(
+            title=f"Bug reported (#{bug_id})",
+            description=bug,
+            color=0xE67E22,
+        )
+        .set_footer(text="FightLab.net")
+    )
+    await ctx.respond(embed=embed, ephemeral=True)
+
+
+@bot.slash_command(
+    name="showbugs",
+    description="Lists all reported bugs (Admin)",
+    default_member_permissions=discord.Permissions(manage_messages=True),
+)
+async def showbugs(
+    ctx: discord.ApplicationContext,
+    status: discord.Option(
+        str,
+        description="Filter by status",
+        choices=["open", "resolved", "all"],
+    ) = "open",
+):
+    load_bugs_data()
+    bugs = [
+        b
+        for b in bugs_data["bugs"]
+        if status == "all" or b.get("status", "open") == status
+    ]
+    bugs = bugs[-15:][::-1]
+    if not bugs:
+        await ctx.respond("No bugs found.", ephemeral=True)
+        return
+    embed = discord.Embed(title=f"Bugs ({status})", color=0xE67E22)
+    for b in bugs:
+        embed.add_field(
+            name=f"#{b['id']} · {b['author_name']} · {b['created_at'][:10]} · {b.get('status', 'open')}",
+            value=b["content"][:150],
+            inline=False,
+        )
+    await ctx.respond(embed=embed)
+
+
+@bot.slash_command(
+    name="bugresolve",
+    description="Marks a bug as resolved (Admin)",
+    default_member_permissions=discord.Permissions(manage_messages=True),
+)
+async def bugresolve(
+    ctx: discord.ApplicationContext,
+    bug_id: discord.Option(int, description="ID of the bug", required=True),
+):
+    load_bugs_data()
+    for b in bugs_data["bugs"]:
+        if b["id"] == bug_id:
+            b["status"] = "resolved"
+            save_bugs_data()
+            await ctx.respond(f"Bug #{bug_id} marked as resolved.", ephemeral=True)
+            return
+    await ctx.respond(f"Bug #{bug_id} not found.", ephemeral=True)
+
+
+@bot.slash_command(
+    name="report",
+    description="Reports a player",
+)
+async def report(
+    ctx: discord.ApplicationContext,
+    player: discord.Option(discord.Member, description="Player to report", required=True),
+    reason: discord.Option(
+        str,
+        description="Reason for the report",
+        required=True,
+        max_length=1000,
+    ),
+):
+    load_reports_data()
+    reports_data["counter"] += 1
+    report_id = reports_data["counter"]
+    reports_data["reports"].append(
+        {
+            "id": report_id,
+            "reporter_id": str(ctx.author.id),
+            "reporter_name": ctx.author.display_name,
+            "reported_id": str(player.id),
+            "reported_name": player.display_name,
+            "reason": reason,
+            "created_at": now_iso(),
+            "status": "open",
+        }
+    )
+    save_reports_data()
+    embed = (
+        discord.Embed(
+            title=f"Report submitted (#{report_id})",
+            description=f"{player.mention} has been reported.",
+            color=0xE74C3C,
+        )
+        .set_footer(text="FightLab.net")
+    )
+    await ctx.respond(embed=embed, ephemeral=True)
+
+
+@bot.slash_command(
+    name="showreports",
+    description="Lists all reports (Admin)",
+    default_member_permissions=discord.Permissions(manage_messages=True),
+)
+async def showreports(
+    ctx: discord.ApplicationContext,
+    status: discord.Option(
+        str,
+        description="Filter by status",
+        choices=["open", "resolved", "all"],
+    ) = "open",
+):
+    load_reports_data()
+    reports = [
+        r
+        for r in reports_data["reports"]
+        if status == "all" or r.get("status", "open") == status
+    ]
+    reports = reports[-15:][::-1]
+    if not reports:
+        await ctx.respond("No reports found.", ephemeral=True)
+        return
+    embed = discord.Embed(title=f"Reports ({status})", color=0xE74C3C)
+    for r in reports:
+        embed.add_field(
+            name=f"#{r['id']} · {r['reported_name']} (by {r['reporter_name']}) · {r['created_at'][:10]} · {r.get('status', 'open')}",
+            value=r["reason"][:150],
+            inline=False,
+        )
+    await ctx.respond(embed=embed)
+
+
+@bot.slash_command(
+    name="reportresolve",
+    description="Marks a report as resolved (Admin)",
+    default_member_permissions=discord.Permissions(manage_messages=True),
+)
+async def reportresolve(
+    ctx: discord.ApplicationContext,
+    report_id: discord.Option(int, description="ID of the report", required=True),
+):
+    load_reports_data()
+    for r in reports_data["reports"]:
+        if r["id"] == report_id:
+            r["status"] = "resolved"
+            save_reports_data()
+            await ctx.respond(f"Report #{report_id} marked as resolved.", ephemeral=True)
+            return
+    await ctx.respond(f"Report #{report_id} not found.", ephemeral=True)
+
+
+async def check_spam(message):
+    if message.author.guild_permissions.administrator:
+        return
+    if is_staff(message.author, message.guild.id):
+        return
+    now = time.time()
+    user_id = message.author.id
+    history = spam_state.setdefault(user_id, [])
+    history.append((now, message.content))
+    while history and now - history[0][0] > ANTISPAM_WINDOW:
+        history.pop(0)
+    triggered = False
+    if len(history) >= ANTISPAM_MAX_MESSAGES:
+        dupes = sum(1 for _, c in history if c and c == message.content)
+        if dupes >= ANTISPAM_DUPES:
+            triggered = True
+    if not triggered:
+        return
+    if now - last_spam_warn.get(user_id, 0) < ANTISPAM_WARN_COOLDOWN:
+        return
+    last_spam_warn[user_id] = now
+    try:
+        embed = (
+            discord.Embed(
+                title="Antispam Warning",
+                description=(
+                    "You have been spamming in the FightLab.net Discord server.\n"
+                    "Please slow down. Repeated spam can lead to a punishment."
+                ),
+                color=0xE74C3C,
+            )
+            .set_footer(text="FightLab.net")
+        )
+        await message.author.send(embed=embed)
+    except discord.HTTPException:
+        pass
+
+
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
+    if message.guild:
+        await check_spam(message)
     ticket_record = get_ticket(message.channel.id)
     if not ticket_record:
         return
