@@ -29,7 +29,7 @@ WEB_HOST = os.getenv("WEB_HOST", "0.0.0.0")
 WEB_PORT = int(os.getenv("WEB_PORT", "8080"))
 TRANSCRIPTS_DIR = os.path.join(DATA_DIR, "transcripts")
 
-BUILD_TAG = "fix-interaction-timeout-2026-08-02"
+BUILD_TAG = "antispam-bugs-reports-2026-08-02"
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 TEAM_ROLE_ID = int(os.getenv("TEAM_ROLE_ID", "0") or 0)
