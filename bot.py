@@ -29,7 +29,7 @@ WEB_HOST = os.getenv("WEB_HOST", "0.0.0.0")
 WEB_PORT = int(os.getenv("WEB_PORT", "8080"))
 TRANSCRIPTS_DIR = os.path.join(DATA_DIR, "transcripts")
 
-BUILD_TAG = "health-diag-2026-08-02"
+BUILD_TAG = "health-guild-check-2026-08-02"
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 TEAM_ROLE_ID = int(os.getenv("TEAM_ROLE_ID", "0") or 0)
@@ -950,6 +950,18 @@ async def handle_health(request):
             "claimed_category_id": settings.get("claimed_category_id") or None,
             "support_role_id": settings.get("support_role_id") or None,
         }
+    guilds = []
+    for guild in bot.guilds:
+        entry = {"id": str(guild.id), "name": guild.name}
+        if TICKET_CATEGORY_ID:
+            entry["category_found"] = guild.get_channel(int(TICKET_CATEGORY_ID)) is not None
+        if TICKET_CLAIMED_CATEGORY_ID:
+            entry["claimed_category_found"] = (
+                guild.get_channel(int(TICKET_CLAIMED_CATEGORY_ID)) is not None
+            )
+        if TICKET_STAFF_ROLE_ID:
+            entry["staff_role_found"] = guild.get_role(int(TICKET_STAFF_ROLE_ID)) is not None
+        guilds.append(entry)
     return web.json_response(
         {
             "status": "ok",
@@ -964,6 +976,7 @@ async def handle_health(request):
                 "DATA_DIR": DATA_DIR,
             },
             "stored_settings": settings_summary,
+            "guilds": guilds,
         }
     )
 
