@@ -29,7 +29,7 @@ WEB_HOST = os.getenv("WEB_HOST", "0.0.0.0")
 WEB_PORT = int(os.getenv("WEB_PORT", "8080"))
 TRANSCRIPTS_DIR = os.path.join(DATA_DIR, "transcripts")
 
-BUILD_TAG = "closed-ticket-delete-btn-2026-08-02"
+BUILD_TAG = "health-diag-2026-08-02"
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 TEAM_ROLE_ID = int(os.getenv("TEAM_ROLE_ID", "0") or 0)
@@ -942,10 +942,36 @@ async def handle_transcript(request):
         return web.Response(text=f.read(), content_type="text/html")
 
 
+async def handle_health(request):
+    settings_summary = {}
+    for guild_id, settings in tickets_data.get("settings", {}).items():
+        settings_summary[guild_id] = {
+            "category_id": settings.get("category_id") or None,
+            "claimed_category_id": settings.get("claimed_category_id") or None,
+            "support_role_id": settings.get("support_role_id") or None,
+        }
+    return web.json_response(
+        {
+            "status": "ok",
+            "build": BUILD_TAG,
+            "env": {
+                "TICKET_CATEGORY_ID": TICKET_CATEGORY_ID or None,
+                "TICKET_CLAIMED_CATEGORY_ID": TICKET_CLAIMED_CATEGORY_ID or None,
+                "TICKET_STAFF_ROLE_ID": TICKET_STAFF_ROLE_ID or None,
+                "TEAM_ROLE_ID": TEAM_ROLE_ID or None,
+                "BASE_URL": BASE_URL,
+                "WEB_PORT": WEB_PORT,
+                "DATA_DIR": DATA_DIR,
+            },
+            "stored_settings": settings_summary,
+        }
+    )
+
+
 async def web_server():
     app = web.Application()
     app.router.add_get("/transcript/{token}", handle_transcript)
-    app.router.add_get("/api/health", lambda r: web.json_response({"status": "ok", "build": BUILD_TAG}))
+    app.router.add_get("/api/health", handle_health)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, WEB_HOST, WEB_PORT)
