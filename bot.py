@@ -29,7 +29,7 @@ WEB_HOST = os.getenv("WEB_HOST", "0.0.0.0")
 WEB_PORT = int(os.getenv("WEB_PORT", "8080"))
 TRANSCRIPTS_DIR = os.path.join(DATA_DIR, "transcripts")
 
-BUILD_TAG = "antispam-bugs-reports-2026-08-02"
+BUILD_TAG = "closed-ticket-delete-btn-2026-08-02"
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 TEAM_ROLE_ID = int(os.getenv("TEAM_ROLE_ID", "0") or 0)
@@ -1004,7 +1004,11 @@ async def close_ticket(channel):
         )
         .set_footer(text="FightLab.net")
     )
-    await channel.send(embed=embed)
+    view = ClosedTicketView()
+    msg = await channel.send(embed=embed, view=view)
+    bot.add_view(view, message_id=msg.id)
+    ticket["closed_msg_id"] = str(msg.id)
+    save_ticket_data()
     if transcript_url:
         await dm_transcript(creator, transcript_url)
     return True
@@ -1276,6 +1280,37 @@ class TicketDeleteConfirmView(discord.ui.View):
         ):
             await interaction.response.send_message(
                 "Only the ticket creator can confirm the deletion.",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.send_message(
+            "The ticket is being deleted…", ephemeral=True
+        )
+        await delete_ticket(interaction.channel)
+
+
+class ClosedTicketView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(
+        label="Delete Ticket",
+        style=discord.ButtonStyle.danger,
+        custom_id="ticket_closed_delete",
+        emoji="🗑️",
+    )
+    async def delete_button(self, button, interaction):
+        ticket = get_ticket(interaction.channel_id)
+        if not ticket:
+            await interaction.response.send_message(
+                "This is not a ticket channel.", ephemeral=True
+            )
+            return
+        if str(interaction.user.id) != ticket.get("creator") and not is_staff(
+            interaction.user, interaction.guild_id
+        ):
+            await interaction.response.send_message(
+                "Only the ticket creator or team members can delete this ticket.",
                 ephemeral=True,
             )
             return
@@ -1849,6 +1884,9 @@ async def on_ready():
         owner_left_msg_id = ticket_record.get("owner_left_msg_id")
         if owner_left_msg_id:
             bot.add_view(OwnerLeftView(), message_id=int(owner_left_msg_id))
+        closed_msg_id = ticket_record.get("closed_msg_id")
+        if closed_msg_id:
+            bot.add_view(ClosedTicketView(), message_id=int(closed_msg_id))
         if ticket_record.get("status") == "open" and ticket_record.get("ticket_msg_id"):
             bot.add_view(TicketChannelView(), message_id=int(ticket_record["ticket_msg_id"]))
     save_ticket_data()
