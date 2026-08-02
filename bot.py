@@ -28,6 +28,8 @@ WEB_HOST = os.getenv("WEB_HOST", "0.0.0.0")
 WEB_PORT = int(os.getenv("WEB_PORT", "8080"))
 TRANSCRIPTS_DIR = os.path.join(DATA_DIR, "transcripts")
 
+BUILD_TAG = "fix-interaction-timeout-2026-08-02"
+
 TOKEN = os.getenv("DISCORD_TOKEN")
 TEAM_ROLE_ID = int(os.getenv("TEAM_ROLE_ID", "0") or 0)
 
@@ -902,7 +904,7 @@ async def handle_transcript(request):
 async def web_server():
     app = web.Application()
     app.router.add_get("/transcript/{token}", handle_transcript)
-    app.router.add_get("/api/health", lambda r: web.json_response({"status": "ok"}))
+    app.router.add_get("/api/health", lambda r: web.json_response({"status": "ok", "build": BUILD_TAG}))
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, WEB_HOST, WEB_PORT)
@@ -1558,6 +1560,7 @@ async def autoclose_loop():
 
 @bot.event
 async def on_ready():
+    print(f"BUILD: {BUILD_TAG}")
     print(f"Eingeloggt als {bot.user} (ID: {bot.user.id})")
     load_invites_data()
     for guild in bot.guilds:
