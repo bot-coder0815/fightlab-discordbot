@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+
+# Secrets & Laufzeitdaten
+.env
+data/
+transcripts/
+invites_data.json
+tickets_data.json
+
+# Alte ImageMagick-Datei (wäre sonst import-shadow)
+discord.ps

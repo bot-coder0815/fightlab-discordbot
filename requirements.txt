@@ -1,0 +1,4 @@
+py-cord==2.8.1
+googletrans==3.1.0a0
+python-dotenv==1.0.1
+aiohttp>=3.13.2
