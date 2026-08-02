@@ -861,8 +861,8 @@ async def create_transcript(channel) -> str | None:
         return None
     token = secrets.token_urlsafe(16)
     os.makedirs(TRANSCRIPTS_DIR, exist_ok=True)
-    html_content = format_transcript(
-        channel.guild.name, channel.name, now_iso(), messages
+    html_content = await asyncio.to_thread(
+        format_transcript, channel.guild.name, channel.name, now_iso(), messages
     )
     with open(
         os.path.join(TRANSCRIPTS_DIR, f"{token}.html"), "w", encoding="utf-8"
@@ -1269,43 +1269,42 @@ async def ticket_create(
 
 @ticket.command(name="close", description="Closes the ticket")
 async def ticket_close(ctx: discord.ApplicationContext):
+    await ctx.defer(ephemeral=True)
     ticket_record = get_ticket(ctx.channel_id)
     if not ticket_record:
-        await ctx.respond("This is not a ticket channel.", ephemeral=True)
+        await ctx.followup.send("This is not a ticket channel.", ephemeral=True)
         return
     if ticket_record.get("status") == "closed":
-        await ctx.respond("The ticket is already closed.", ephemeral=True)
+        await ctx.followup.send("The ticket is already closed.", ephemeral=True)
         return
     if ctx.author.id == int(ticket_record["creator"]):
-        await ctx.defer(ephemeral=True)
         await send_staff_close_request(ctx.channel, ticket_record, ctx.author)
         await ctx.followup.send(
             "A close request has been sent to the team. A team member must confirm the closure.",
             ephemeral=True,
         )
     elif is_staff(ctx.author, ctx.guild.id):
-        await ctx.defer(ephemeral=True)
         await send_close_request(ctx.channel, ticket_record, ctx.author)
         await ctx.followup.send(
             "A close request has been sent to the ticket owner.", ephemeral=True
         )
     else:
-        await ctx.respond("You don't have permission.", ephemeral=True)
+        await ctx.followup.send("You don't have permission.", ephemeral=True)
 
 
 @ticket.command(name="delete", description="Deletes the ticket (with confirmation)")
 async def ticket_delete(ctx: discord.ApplicationContext):
+    await ctx.defer(ephemeral=True)
     ticket_record = get_ticket(ctx.channel_id)
     if not ticket_record:
-        await ctx.respond("This is not a ticket channel.", ephemeral=True)
+        await ctx.followup.send("This is not a ticket channel.", ephemeral=True)
         return
     if ctx.author.id != int(ticket_record["creator"]):
-        await ctx.respond(
+        await ctx.followup.send(
             "Only the ticket creator can request a deletion. Admins can use /ticket admindelete.",
             ephemeral=True,
         )
         return
-    await ctx.defer(ephemeral=True)
     embed = discord.Embed(
         title="Delete Ticket",
         description="Are you sure you want to delete this ticket?",
@@ -1319,14 +1318,14 @@ async def ticket_delete(ctx: discord.ApplicationContext):
 
 @ticket.command(name="claim", description="Claims the ticket (Team)")
 async def ticket_claim(ctx: discord.ApplicationContext):
+    await ctx.defer(ephemeral=True)
     ticket_record = get_ticket(ctx.channel_id)
     if not ticket_record:
-        await ctx.respond("This is not a ticket channel.", ephemeral=True)
+        await ctx.followup.send("This is not a ticket channel.", ephemeral=True)
         return
     if not is_staff(ctx.author, ctx.guild.id):
-        await ctx.respond("You don't have permission.", ephemeral=True)
+        await ctx.followup.send("You don't have permission.", ephemeral=True)
         return
-    await ctx.defer(ephemeral=True)
     ticket_record["claimed_by"] = str(ctx.author.id)
     save_ticket_data()
     settings = get_ticket_settings(ctx.guild.id)
@@ -1348,14 +1347,15 @@ async def ticket_claim(ctx: discord.ApplicationContext):
     name="admindelete", description="Deletes the ticket without confirmation (Admin)"
 )
 async def ticket_admindelete(ctx: discord.ApplicationContext):
+    await ctx.defer(ephemeral=True)
     ticket_record = get_ticket(ctx.channel_id)
     if not ticket_record:
-        await ctx.respond("This is not a ticket channel.", ephemeral=True)
+        await ctx.followup.send("This is not a ticket channel.", ephemeral=True)
         return
     if not is_staff(ctx.author, ctx.guild.id):
-        await ctx.respond("You don't have permission.", ephemeral=True)
+        await ctx.followup.send("You don't have permission.", ephemeral=True)
         return
-    await ctx.respond("The ticket is being deleted…", ephemeral=True)
+    await ctx.followup.send("The ticket is being deleted…", ephemeral=True)
     await delete_ticket(ctx.channel)
 
 
@@ -1364,21 +1364,21 @@ async def ticket_admindelete(ctx: discord.ApplicationContext):
     description="Requests the logs of the ticket creator (Ban Appeal)",
 )
 async def ticket_getlogs(ctx: discord.ApplicationContext):
+    await ctx.defer(ephemeral=True)
     ticket_record = get_ticket(ctx.channel_id)
     if not ticket_record:
-        await ctx.respond("This is not a ticket channel.", ephemeral=True)
+        await ctx.followup.send("This is not a ticket channel.", ephemeral=True)
         return
     if topic_kind(ticket_record.get("topic", "")) != "ban_appeal":
-        await ctx.respond(
+        await ctx.followup.send(
             "This command is only available in Ban Appeal tickets.", ephemeral=True
         )
         return
     if str(ctx.author.id) != ticket_record["creator"] and not is_staff(
         ctx.author, ctx.guild.id
     ):
-        await ctx.respond("You don't have permission.", ephemeral=True)
+        await ctx.followup.send("You don't have permission.", ephemeral=True)
         return
-    await ctx.defer(ephemeral=True)
     expires = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
     embed = discord.Embed(
         title="Logs Requested",
