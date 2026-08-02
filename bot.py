@@ -29,7 +29,7 @@ WEB_HOST = os.getenv("WEB_HOST", "0.0.0.0")
 WEB_PORT = int(os.getenv("WEB_PORT", "8080"))
 TRANSCRIPTS_DIR = os.path.join(DATA_DIR, "transcripts")
 
-BUILD_TAG = "health-guild-check-2026-08-02"
+BUILD_TAG = "topics-fallback-fix-2026-08-02"
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 TEAM_ROLE_ID = int(os.getenv("TEAM_ROLE_ID", "0") or 0)
@@ -443,16 +443,18 @@ def get_ticket_settings(guild_id):
 
 
 def load_ticket_topics() -> list[str]:
-    if os.path.exists(TICKET_TOPICS_FILE):
-        try:
-            with open(TICKET_TOPICS_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            if isinstance(data, list):
-                topics = [str(t).strip() for t in data if str(t).strip()]
-                if topics:
-                    return topics
-        except (json.JSONDecodeError, OSError):
-            pass
+    candidates = [TICKET_TOPICS_FILE, os.path.join(BASE_DIR, "ticket_topics.json")]
+    for path in candidates:
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, list):
+                    topics = [str(t).strip() for t in data if str(t).strip()]
+                    if topics:
+                        return topics
+            except (json.JSONDecodeError, OSError):
+                continue
     return ["Bug Report", "Support", "General", "Ban Appeal"]
 
 
@@ -1907,6 +1909,7 @@ async def on_ready():
     save_invites_data()
     load_ticket_data()
     panel_topics = load_ticket_topics()
+    print("Ticket topics:", panel_topics)
     for settings in tickets_data["settings"].values():
         panel_message_id = settings.get("panel_message_id")
         if panel_message_id:
