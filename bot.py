@@ -54,6 +54,8 @@ intents.invites = True
 
 bot = discord.Bot(intents=intents)
 
+BOT_ACTIVITY = discord.Game(name="ꜰɪɢʜᴛʟᴀʙᴍᴄ.ɴᴇᴛ")
+
 translator = Translator()
 
 invites_data: dict = {"invites": {}, "invite_cache": {}, "members": {}}
@@ -2331,8 +2333,7 @@ async def status(
         "dnd": discord.Status.dnd,
         "invisible": discord.Status.invisible,
     }
-    activity = discord.Game(name="ꜰɪɢʜᴛʟᴀʙᴍᴄ.ɴᴇᴛ")
-    await bot.change_presence(status=status_map[mode], activity=activity)
+    await bot.change_presence(status=status_map[mode], activity=BOT_ACTIVITY)
     await ctx.followup.send(f"Status changed to **{mode}**.", ephemeral=True)
 
 
@@ -2781,6 +2782,9 @@ async def on_ready():
     load_ticket_data()
     load_language_config()
     print("Role-language map:", build_role_language_map())
+    await bot.change_presence(
+        status=discord.Status.online, activity=BOT_ACTIVITY
+    )
     if JOIN_LOG_CHANNEL_ID:
         join_channel = bot.get_channel(int(JOIN_LOG_CHANNEL_ID))
         if join_channel:
