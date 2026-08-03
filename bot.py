@@ -2391,6 +2391,10 @@ async def try_capture_logs(message, ticket_record):
         expires = None
     if not (expires and datetime.now(timezone.utc) <= expires):
         return False
+    try:
+        message = await message.channel.fetch_message(message.id)
+    except discord.HTTPException:
+        pass
     attachments = [attachment.url for attachment in message.attachments]
     combined = message.content
     if attachments:
@@ -2427,6 +2431,11 @@ async def try_capture_logs(message, ticket_record):
     }
     ticket_record.pop("logs_request_msg_id", None)
     ticket_record.pop("logs_request_expires", None)
+    print(
+        "[getlogs] Captured logs: "
+        f"channel={message.channel.id} attachments={len(attachments)} "
+        f"content_len={len(message.content)}"
+    )
     confirm = discord.Embed(
         title="Logs received",
         description="Your logs have been received. Thank you!",
