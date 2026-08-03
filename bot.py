@@ -398,7 +398,7 @@ class LanguageSelect(discord.ui.Select):
             for code, name in LANGUAGES.items()
         ]
         super().__init__(
-            placeholder="Ankündigung in einer anderen Sprache ansehen…",
+            placeholder="View this announcement in another language…",
             min_values=1,
             max_values=1,
             options=options,
@@ -416,7 +416,7 @@ class LanguageSelect(discord.ui.Select):
             )
         except Exception as exc:
             await interaction.followup.send(
-                f"Übersetzung fehlgeschlagen: {exc}", ephemeral=True
+                f"Translation failed: {exc}", ephemeral=True
             )
             return
         embed = (
@@ -440,26 +440,26 @@ class NewsView(discord.ui.View):
 
 class NewsModal(discord.ui.Modal):
     news = discord.ui.InputText(
-        label="Nachricht",
+        label="Message",
         style=discord.InputTextStyle.paragraph,
-        placeholder="Deine Ankündigung…",
+        placeholder="Your announcement…",
         required=True,
         max_length=4000,
     )
 
     def __init__(self, channel: discord.TextChannel):
-        super().__init__(self.news, title="Neue News / Ankündigung")
+        super().__init__(self.news, title="News / Announcement")
         self.channel = channel
 
     async def callback(self, interaction: discord.Interaction):
-        print("on_submit: Modal wurde abgesendet")
+        print("on_submit: modal submitted")
         content = self.news.value
         await interaction.response.defer(ephemeral=True)
         author_name = f"{interaction.user.display_name} | FIGHTLAB.NET"
         author_icon = interaction.user.display_avatar.url
         embed = (
             discord.Embed(
-                title="Ankündigung",
+                title="Announcement",
                 description=content,
                 color=0x00FFAA,
                 timestamp=discord.utils.utcnow(),
@@ -469,28 +469,28 @@ class NewsModal(discord.ui.Modal):
         )
         try:
             msg = await self.channel.send(embed=embed)
-            await msg.edit(view=NewsView(content, "Ankündigung", author_name, author_icon))
+            await msg.edit(view=NewsView(content, "Announcement", author_name, author_icon))
         except discord.Forbidden:
             await interaction.followup.send(
-                "Ich habe keine Berechtigung, in diesen Kanal zu schreiben.",
+                "I don't have permission to send messages in this channel.",
                 ephemeral=True,
             )
             return
         except discord.HTTPException as exc:
             await interaction.followup.send(
-                f"Fehler beim Senden: {exc}", ephemeral=True
+                f"Error sending: {exc}", ephemeral=True
             )
             return
         await interaction.followup.send(
-            f"News in {self.channel.mention} veröffentlicht.", ephemeral=True
+            f"News published in {self.channel.mention}.", ephemeral=True
         )
 
 
 class SayModal(discord.ui.Modal):
     message = discord.ui.InputText(
-        label="Nachricht",
+        label="Message",
         style=discord.InputTextStyle.paragraph,
-        placeholder="Text, den der Bot senden soll…",
+        placeholder="Text the bot should send…",
         required=True,
         max_length=4000,
     )
@@ -506,54 +506,54 @@ class SayModal(discord.ui.Modal):
             await self.channel.send(content)
         except discord.Forbidden:
             await interaction.followup.send(
-                "Ich habe keine Berechtigung, in diesen Kanal zu schreiben.",
+                "I don't have permission to send messages in this channel.",
                 ephemeral=True,
             )
             return
         except discord.HTTPException as exc:
             await interaction.followup.send(
-                f"Fehler beim Senden: {exc}", ephemeral=True
+                f"Error sending: {exc}", ephemeral=True
             )
             return
         await interaction.followup.send(
-            f"Nachricht in {self.channel.mention} gesendet.", ephemeral=True
+            f"Message sent in {self.channel.mention}.", ephemeral=True
         )
-        print("on_submit: fertig")
+        print("on_submit: done")
 
 
 @bot.slash_command(
     name="tellnews",
-    description="News / Ankündigung erstellen",
+    description="Create a news / announcement",
     default_member_permissions=discord.Permissions(manage_messages=True),
 )
 async def tellnews(
     ctx: discord.ApplicationContext,
     channel: discord.Option(
         discord.TextChannel,
-        description="Kanal, in den die News veröffentlicht werden (Standard: aktueller Kanal)",
+        description="Channel to publish the news in (default: current channel)",
     ) = None,
 ):
     if TEAM_ROLE_ID and not any(role.id == TEAM_ROLE_ID for role in ctx.user.roles):
         await ctx.respond(
-            "Du bist nicht berechtigt, News zu senden.", ephemeral=True
+            "You are not allowed to send news.", ephemeral=True
         )
         return
     target = channel or ctx.channel
     if not isinstance(target, discord.TextChannel):
-        await ctx.respond("Der Zielkanal ist kein Textkanal.", ephemeral=True)
+        await ctx.respond("The target channel is not a text channel.", ephemeral=True)
         return
-    print("tellnews: Modal wird geöffnet")
+    print("tellnews: opening modal")
     await ctx.send_modal(NewsModal(target))
 
 
 @bot.slash_command(
     name="say",
-    description="Lass den Bot einen Text in diesem Kanal senden (Admin)",
+    description="Make the bot send a text in this channel (Admin)",
 )
 async def say(ctx: discord.ApplicationContext):
     if not ctx.author.guild_permissions.administrator:
         await ctx.respond(
-            "Du brauchst Administrator-Berechtigungen.", ephemeral=True
+            "You need administrator permissions.", ephemeral=True
         )
         return
     await ctx.send_modal(SayModal(ctx.channel))
