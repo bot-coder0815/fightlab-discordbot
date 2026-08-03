@@ -18,6 +18,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.getenv("DATA_DIR", BASE_DIR)
 DATA_FILE = os.path.join(DATA_DIR, "invites_data.json")
 INVITES_CHANNEL_ID = os.getenv("INVITES_CHANNEL_ID")
+JOIN_LOG_CHANNEL_ID = os.getenv("JOIN_LOG_CHANNEL_ID")
 
 TICKET_CATEGORY_ID = os.getenv("TICKET_CATEGORY_ID")
 TICKET_CLAIMED_CATEGORY_ID = os.getenv("TICKET_CLAIMED_CATEGORY_ID")
@@ -210,6 +211,7 @@ async def on_member_join(member):
     guild = member.guild
     guild_id = str(guild.id)
     joined_via = None
+    joined_code = None
 
     try:
         invites = await guild.invites()
@@ -223,6 +225,7 @@ async def on_member_join(member):
         old = old_cache.get(code)
         if old is not None and uses > old["uses"]:
             joined_via = old["inviter"]
+            joined_code = code
             old_cache[code]["uses"] = uses
             break
 
@@ -246,6 +249,36 @@ async def on_member_join(member):
             stats["regular"] += 1
 
     save_invites_data()
+
+    if JOIN_LOG_CHANNEL_ID:
+        channel = guild.get_channel(int(JOIN_LOG_CHANNEL_ID))
+        if channel:
+            inviter = guild.get_member(int(joined_via)) if joined_via else None
+            created = member.created_at
+            account_age_days = (
+                (discord.utils.utcnow() - created).days if created else None
+            )
+            embed = (
+                discord.Embed(
+                    title="Member joined",
+                    description=(
+                        f"{member.mention} (`{member.id}`)\n"
+                        f"**Account created:** "
+                        f"{created.strftime('%Y-%m-%d') if created else 'unknown'} "
+                        f"({account_age_days} days ago)"
+                        + (f"\n**Invited by:** {inviter.mention}" if inviter else "")
+                        + (f"\n**Invite code:** {joined_code}" if joined_code else "")
+                    ),
+                    color=0x2ECC71,
+                    timestamp=discord.utils.utcnow(),
+                )
+                .set_thumbnail(url=member.display_avatar.url)
+                .set_footer(text="FightLab.net")
+            )
+            try:
+                await channel.send(embed=embed)
+            except discord.HTTPException as exc:
+                print("Could not send join log:", exc)
 
 
 @bot.event
