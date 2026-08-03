@@ -1886,6 +1886,11 @@ async def download_log_attachment(url: str, max_bytes: int = 400_000) -> str:
                     data = await response.read()
                     if len(data) > max_bytes:
                         data = data[:max_bytes]
+                    for encoding in ("utf-8", "utf-16"):
+                        try:
+                            return data.decode(encoding)
+                        except UnicodeDecodeError:
+                            continue
                     return data.decode("utf-8", errors="replace")
     except Exception as exc:
         print(f"Could not download log attachment: {exc}")
@@ -2382,18 +2387,13 @@ async def on_message(message):
                         text = await download_log_attachment(url)
                         if text:
                             combined = combined + "\n" + text if combined else text
-                if combined.strip():
-                    valid = looks_like_logs(combined)
-                else:
-                    valid = bool(attachments)
-                if not valid:
+                if not attachments and not looks_like_logs(combined):
                     embed = discord.Embed(
                         title="Logs not recognized",
                         description=(
-                            "That does not look like logs (attached files were checked "
-                            "too). Please reply to the logs request with your logs as "
-                            "a file or as text with timestamps (e.g. "
-                            "`[12:34:56] [Server thread/INFO]: ...`).\n"
+                            "That does not look like logs. Please reply to the logs "
+                            "request with your logs as a file or as text with "
+                            "timestamps (e.g. `[12:34:56] [Server thread/INFO]: ...`).\n"
                             "You can try again — the request is still valid."
                         ),
                         color=0xE74C3C,
