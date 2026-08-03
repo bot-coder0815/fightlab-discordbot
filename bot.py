@@ -1901,7 +1901,30 @@ async def download_log_attachment(url: str, max_bytes: int = 400_000) -> str:
     return ""
 
 
+HACK_CLIENT_PATTERN = re.compile(
+    r"\b(meteor|wurst|impact|future|liquid\s?bounce|sigma|flux|kami|konas|"
+    r"astolfo|novoline|tenacity|salhack|rusherhack|inertia|whiteout|dreytap|"
+    r"vape|barython|phobos|seaton|exhi)\b",
+    re.I,
+)
+MODDED_CLIENT_PATTERN = re.compile(
+    r"\bmodded client\b|is a modded client|client:\s*modded|"
+    r"modded client detected|incompatible client|has mods installed|"
+    r"mods?\s*detected|client modification|unauthorized modification",
+    re.I,
+)
+
 LOG_ANALYSIS_PATTERNS = [
+    (
+        "Hack Clients",
+        HACK_CLIENT_PATTERN,
+        "Names of known cheat/hack clients found in the log.",
+    ),
+    (
+        "Modded / Unauthorized Client",
+        MODDED_CLIENT_PATTERN,
+        "The server detected a modded or unauthorized client.",
+    ),
     (
         "Speed / Wrong Movement",
         re.compile(
@@ -1967,12 +1990,25 @@ LOG_ANALYSIS_PATTERNS = [
 ]
 
 
-def analyze_logs(text: str) -> list[tuple[str, int, str]]:
+def analyze_logs(text: str) -> list[dict]:
     findings = []
     for name, pattern, description in LOG_ANALYSIS_PATTERNS:
-        count = len(pattern.findall(text or ""))
-        if count:
-            findings.append((name, count, description))
+        matches = [m for m in pattern.finditer(text or "")]
+        if not matches:
+            continue
+        names = []
+        for m in matches:
+            found = (m.group(1) or m.group(0)) if m.groups() else m.group(0)
+            if found.lower() not in names:
+                names.append(found.lower())
+        findings.append(
+            {
+                "name": name,
+                "count": len(matches),
+                "description": description,
+                "matches": names,
+            }
+        )
     return findings
 
 
@@ -2064,9 +2100,16 @@ async def ticket_analyze_logs(ctx: discord.ApplicationContext):
         embed.description = (
             f"Found {len(findings)} potential indicator(s) in the logs:"
         )
-        for name, count, description in findings:
+        for finding in findings:
+            value = finding["description"]
+            if finding["matches"]:
+                value = "Detected: " + ", ".join(
+                    sorted(set(finding["matches"]))
+                ) + "\n" + value
             embed.add_field(
-                name=f"{name} ({count}x)", value=description, inline=False
+                name=f"{finding['name']} ({finding['count']}x)",
+                value=value,
+                inline=False,
             )
     embed.set_footer(text="FightLabMC.net")
     await ctx.followup.send(embed=embed, ephemeral=True)
