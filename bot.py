@@ -143,7 +143,7 @@ def load_invites_data():
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             invites_data = json.load(f)
-    for key in ("invites", "invite_cache", "members"):
+    for key in ("invites", "invite_cache", "members", "known_members"):
         invites_data.setdefault(key, {})
 
 
@@ -237,6 +237,11 @@ async def on_member_join(member):
         "joined_at": now_iso(),
         "fake": fake,
     }
+    known_members = invites_data.setdefault("known_members", {}).setdefault(
+        guild_id, {}
+    )
+    is_returning = str(member.id) in known_members
+    known_members[str(member.id)] = now_iso()
 
     if joined_via:
         stats = get_user_stats(guild.id, int(joined_via))
@@ -255,11 +260,21 @@ async def on_member_join(member):
             account_age_days = (
                 (discord.utils.utcnow() - created).days if created else None
             )
+            if is_returning:
+                welcome = (
+                    f"Welcome back to FightLabMC.net, "
+                    f"{member.display_name} ({member.mention})! 🎉"
+                )
+            else:
+                welcome = (
+                    f"Welcome to FightLabMC.net, "
+                    f"{member.display_name} ({member.mention})! 🎉"
+                )
             embed = (
                 discord.Embed(
                     title="Member joined",
                     description=(
-                        f"Welcome to FightLabMC.net, {member.display_name} ({member.mention})! 🎉\n"
+                        f"{welcome}\n"
                         f"**Account created:** "
                         f"{created.strftime('%Y-%m-%d') if created else 'unknown'} "
                         f"({account_age_days} days ago)"
