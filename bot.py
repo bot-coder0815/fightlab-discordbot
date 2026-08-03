@@ -83,8 +83,6 @@ def build_role_language_map() -> dict[str, str]:
     return role_map
 
 
-ROLE_LANGUAGE_MAP = build_role_language_map()
-
 LANGUAGE_ALIASES = {
     "de": {"de", "deutsch", "german"},
     "en": {"en", "english", "englisch"},
@@ -111,8 +109,9 @@ def load_language_config():
 
 
 def get_user_language(member) -> str:
+    role_map = build_role_language_map()
     for role in member.roles:
-        code = ROLE_LANGUAGE_MAP.get(str(role.id))
+        code = role_map.get(str(role.id))
         if code:
             return code
     for role in member.roles:
@@ -742,6 +741,7 @@ class CooperationModal(BaseAppModal):
 
 def get_topic_modal(guild, creator, topic: str):
     lang = get_user_language(creator)
+    print(f"get_topic_modal: topic={topic!r} lang={lang!r} roles={[r.name for r in creator.roles]}")
     kind = topic_kind(topic)
     if kind == "ban_appeal":
         return BanAppealModal(guild, creator, topic, lang)
@@ -2004,6 +2004,7 @@ async def on_ready():
     save_invites_data()
     load_ticket_data()
     load_language_config()
+    print("Role-language map:", build_role_language_map())
     panel_topics = load_ticket_topics()
     print("Ticket topics:", panel_topics)
     for settings in tickets_data["settings"].values():
