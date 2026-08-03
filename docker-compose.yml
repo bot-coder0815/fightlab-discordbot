@@ -1,7 +1,7 @@
 services:
   bot:
     build: .
-    container_name: fightlab-bot
+    container_name: fightlabmc-bot
     restart: unless-stopped
     environment:
       - DISCORD_TOKEN=${DISCORD_TOKEN:?set DISCORD_TOKEN}

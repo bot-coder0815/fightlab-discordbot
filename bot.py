@@ -35,6 +35,14 @@ BUILD_TAG = "topics-fallback-fix-2026-08-02"
 TOKEN = os.getenv("DISCORD_TOKEN")
 TEAM_ROLE_ID = int(os.getenv("TEAM_ROLE_ID", "0") or 0)
 
+ACCESS_CODE_LIFETIME = 600
+SESSION_LIFETIME = 1800
+dashboard_code: str | None = None
+dashboard_code_expires: float = 0.0
+dashboard_sessions: dict[str, float] = {}
+
+DASHBOARD_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
 intents = discord.Intents.default()
 intents.members = True
 intents.invites = True
@@ -283,7 +291,7 @@ async def on_member_join(member):
                     timestamp=discord.utils.utcnow(),
                 )
                 .set_thumbnail(url=member.display_avatar.url)
-                .set_footer(text="FightLab.net")
+                .set_footer(text="FightLabMC.net")
             )
             try:
                 await channel.send(embed=embed)
@@ -333,7 +341,7 @@ async def handle_owner_left(member):
                 color=0xE74C3C,
                 timestamp=discord.utils.utcnow(),
             )
-            .set_footer(text="FightLab.net")
+            .set_footer(text="FightLabMC.net")
         )
         view = OwnerLeftView()
         msg = await channel.send(embed=embed, view=view)
@@ -382,7 +390,7 @@ class LanguageSelect(discord.ui.Select):
                 timestamp=discord.utils.utcnow(),
             )
             .set_author(name=self.author_name, icon_url=self.author_icon)
-            .set_footer(text="FightLab.net")
+            .set_footer(text="FightLabMC.net")
         )
         await interaction.followup.send(embed=embed, ephemeral=True)
 
@@ -420,7 +428,7 @@ class NewsModal(discord.ui.Modal):
                 timestamp=discord.utils.utcnow(),
             )
             .set_author(name=author_name, icon_url=author_icon)
-            .set_footer(text="FightLab.net")
+            .set_footer(text="FightLabMC.net")
         )
         try:
             msg = await self.channel.send(embed=embed)
@@ -490,7 +498,7 @@ async def invites(
         .add_field(name="Active", value=stats["regular"], inline=True)
         .add_field(name="Left", value=stats["left"], inline=True)
         .add_field(name="Fake", value=stats["fake"], inline=True)
-        .set_footer(text="FightLab.net")
+        .set_footer(text="FightLabMC.net")
     )
     await ctx.respond(embed=embed)
 
@@ -873,7 +881,7 @@ async def create_ticket(
             color=0x00FFAA,
             timestamp=discord.utils.utcnow(),
         )
-        .set_footer(text="FightLab.net")
+        .set_footer(text="FightLabMC.net")
     )
     view = TicketChannelView()
     msg = await channel.send(embed=embed, view=view)
@@ -1018,7 +1026,7 @@ def format_transcript(guild_name: str, channel_name: str, closed_at: str, messag
 <body>
 <div class="wrap">
   <header>
-    <div class="logo">FightLab.net · Transcript</div>
+    <div class="logo">FightLabMC.net · Transcript</div>
     <h1>{html_mod.escape(channel_name)}</h1>
     <div class="meta">
       <span>{html_mod.escape(guild_name)}</span>
@@ -1027,7 +1035,7 @@ def format_transcript(guild_name: str, channel_name: str, closed_at: str, messag
     </div>
   </header>
   {''.join(msg_html)}
-  <footer>Powered by FightLab.net · This transcript is private.</footer>
+  <footer>Powered by FightLabMC.net · This transcript is private.</footer>
 </div>
 </body>
 </html>"""
@@ -1061,7 +1069,7 @@ async def dm_transcript(member, url: str):
                 description=f"The transcript of your ticket is available here:\n{url}",
                 color=0x00FFAA,
             )
-            .set_footer(text="FightLab.net")
+            .set_footer(text="FightLabMC.net")
         )
         await member.send(embed=embed)
     except discord.HTTPException as exc:
@@ -1118,10 +1126,238 @@ async def handle_health(request):
     )
 
 
+def dashboard_config_files() -> dict[str, str]:
+    specs = {
+        "languages.json": [
+            LANGUAGE_CONFIG_FILE,
+            os.path.join(BASE_DIR, "languages.json"),
+        ],
+        "ticket_topics.json": [
+            TICKET_TOPICS_FILE,
+            os.path.join(BASE_DIR, "ticket_topics.json"),
+        ],
+    }
+    files = {}
+    for name, paths in specs.items():
+        for path in paths:
+            if path and os.path.exists(path):
+                files[name] = path
+                break
+        if name not in files:
+            base = DATA_DIR if os.path.isdir(DATA_DIR) else BASE_DIR
+            files[name] = os.path.join(base, name)
+    return files
+
+
+def check_dashboard_session(request) -> bool:
+    sid = request.cookies.get("dashboard_session")
+    if not sid:
+        return False
+    expiry = dashboard_sessions.get(sid)
+    if expiry is None or time.time() > expiry:
+        dashboard_sessions.pop(sid, None)
+        return False
+    return True
+
+
+def render_dashboard_login(error: bool = False) -> str:
+    error_html = (
+        '<div class="error">Invalid or expired code. Use /get-access-code to get a new one.</div>'
+        if error
+        else ""
+    )
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FightLabMC Dashboard · Login</title>
+<style>
+  :root {{ --bg: #1e1f22; --panel: #2b2d31; --text: #dbdee1; --dim: #949ba4;
+           --accent: #5865f2; --border: #3f4147; --green: #57f287; --red: #f23f43; }}
+  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+  body {{ background: var(--bg); color: var(--text);
+         font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+         min-height: 100vh; display: flex; align-items: center; justify-content: center; }}
+  .card {{ background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+          padding: 32px; width: 360px; box-shadow: 0 8px 24px rgba(0,0,0,.35); }}
+  h1 {{ font-size: 20px; margin-bottom: 4px; }}
+  p.sub {{ color: var(--dim); font-size: 13px; margin-bottom: 20px; }}
+  .error {{ background: rgba(242,63,67,.15); border: 1px solid var(--red); color: var(--red);
+           border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-bottom: 16px; }}
+  input {{ width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text);
+          border-radius: 8px; padding: 12px; font-size: 15px; margin-bottom: 14px; }}
+  input:focus {{ outline: none; border-color: var(--accent); }}
+  button {{ width: 100%; background: var(--accent); color: #fff; border: 0; border-radius: 8px;
+           padding: 12px; font-size: 15px; font-weight: 600; cursor: pointer; }}
+  button:hover {{ filter: brightness(1.1); }}
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>FightLabMC Dashboard</h1>
+    <p class="sub">Enter the access code. Get one with <code>/get-access-code</code>.</p>
+    {error_html}
+    <form method="post" action="/dashboard/login">
+      <input type="text" name="code" placeholder="Access code" autocomplete="off" required autofocus>
+      <button type="submit">Login</button>
+    </form>
+  </div>
+</body>
+</html>"""
+
+
+def render_dashboard_edit(error: str | None = None, focus_name: str | None = None, focus_content: str | None = None) -> str:
+    files = dashboard_config_files()
+    sections = []
+    for name, path in sorted(files.items()):
+        if name == focus_name:
+            content = focus_content or ""
+            error_html = f'<div class="error">JSON syntax error: {html_mod.escape(error or "")}</div>'
+        else:
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    content = f.read()
+            except OSError:
+                content = ""
+            error_html = ""
+        sections.append(f"""
+      <div class="card">
+        <h2>{html_mod.escape(name)}</h2>
+        <p class="path">{html_mod.escape(path)}</p>
+        {error_html}
+        <form method="post" action="/dashboard/save">
+          <input type="hidden" name="file" value="{html_mod.escape(name)}">
+          <textarea name="content" rows="18" spellcheck="false">{html_mod.escape(content)}</textarea>
+          <button type="submit">Save {html_mod.escape(name)}</button>
+        </form>
+      </div>""")
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FightLabMC Dashboard · Edit Config</title>
+<style>
+  :root {{ --bg: #1e1f22; --panel: #2b2d31; --text: #dbdee1; --dim: #949ba4;
+           --accent: #5865f2; --border: #3f4147; --green: #57f287; --red: #f23f43; }}
+  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+  body {{ background: var(--bg); color: var(--text);
+         font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+         min-height: 100vh; }}
+  .wrap {{ max-width: 900px; margin: 0 auto; padding: 32px 16px 64px; }}
+  header {{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }}
+  h1 {{ font-size: 22px; }}
+  a.logout {{ color: var(--dim); text-decoration: none; font-size: 14px; }}
+  a.logout:hover {{ color: var(--red); }}
+  .card {{ background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+          padding: 20px; margin-bottom: 20px; }}
+  h2 {{ font-size: 16px; margin-bottom: 2px; }}
+  .path {{ color: var(--dim); font-size: 12px; margin-bottom: 12px; word-break: break-all; }}
+  .error {{ background: rgba(242,63,67,.15); border: 1px solid var(--red); color: var(--red);
+           border-radius: 8px; padding: 10px 12px; font-size: 13px; margin-bottom: 12px; }}
+  textarea {{ width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text);
+             border-radius: 8px; padding: 12px; font-family: Consolas, Monaco, monospace;
+             font-size: 13px; line-height: 1.5; resize: vertical; }}
+  textarea:focus {{ outline: none; border-color: var(--accent); }}
+  button {{ background: var(--accent); color: #fff; border: 0; border-radius: 8px;
+           padding: 10px 18px; font-size: 14px; font-weight: 600; cursor: pointer; margin-top: 10px; }}
+  button:hover {{ filter: brightness(1.1); }}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>FightLabMC Dashboard</h1>
+      <a class="logout" href="/dashboard/logout">Logout</a>
+    </header>
+    <p style="color:var(--dim); font-size:14px; margin-bottom:20px;">
+      Edit the JSON configs below. Changes are validated and saved with JSON syntax checking.
+    </p>
+    {''.join(sections)}
+  </div>
+</body>
+</html>"""
+
+
+async def handle_dashboard(request):
+    if check_dashboard_session(request):
+        raise web.HTTPFound("/dashboard/edit")
+    return web.Response(text=render_dashboard_login(), content_type="text/html")
+
+
+async def handle_dashboard_login(request):
+    global dashboard_code
+    data = await request.post()
+    code = (data.get("code") or "").strip().upper()
+    now = time.time()
+    if not dashboard_code or code != dashboard_code or now >= dashboard_code_expires:
+        return web.Response(
+            text=render_dashboard_login(error=True),
+            content_type="text/html",
+            status=401,
+        )
+    dashboard_code = None
+    sid = secrets.token_urlsafe(32)
+    dashboard_sessions[sid] = now + SESSION_LIFETIME
+    for existing, expiry in list(dashboard_sessions.items()):
+        if now > expiry:
+            dashboard_sessions.pop(existing, None)
+    resp = web.HTTPFound("/dashboard/edit")
+    resp.set_cookie("dashboard_session", sid, max_age=SESSION_LIFETIME, httponly=True, samesite="Lax")
+    return resp
+
+
+async def handle_dashboard_edit(request):
+    if not check_dashboard_session(request):
+        raise web.HTTPFound("/dashboard")
+    return web.Response(text=render_dashboard_edit(), content_type="text/html")
+
+
+async def handle_dashboard_logout(request):
+    sid = request.cookies.get("dashboard_session")
+    if sid:
+        dashboard_sessions.pop(sid, None)
+    resp = web.HTTPFound("/dashboard")
+    resp.del_cookie("dashboard_session")
+    return resp
+
+
+async def handle_dashboard_save(request):
+    if not check_dashboard_session(request):
+        raise web.HTTPFound("/dashboard")
+    data = await request.post()
+    name = (data.get("file") or "").strip()
+    content = data.get("content") or ""
+    path = dashboard_config_files().get(name)
+    if not path:
+        raise web.HTTPBadRequest(text="Unknown config file.")
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError as exc:
+        message = f"{exc.msg} (line {exc.lineno}, column {exc.colno})"
+        return web.Response(
+            text=render_dashboard_edit(error=message, focus_name=name, focus_content=content),
+            content_type="text/html",
+        )
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(parsed, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+    if name == "languages.json":
+        load_language_config()
+    print(f"Dashboard: saved config {name} to {path}")
+    return web.HTTPFound("/dashboard/edit")
+
+
 async def web_server():
     app = web.Application()
     app.router.add_get("/transcript/{token}", handle_transcript)
     app.router.add_get("/api/health", handle_health)
+    app.router.add_get("/dashboard", handle_dashboard)
+    app.router.add_post("/dashboard/login", handle_dashboard_login)
+    app.router.add_get("/dashboard/edit", handle_dashboard_edit)
+    app.router.add_post("/dashboard/save", handle_dashboard_save)
+    app.router.add_get("/dashboard/logout", handle_dashboard_logout)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, WEB_HOST, WEB_PORT)
@@ -1178,7 +1414,7 @@ async def close_ticket(channel):
             color=0xE74C3C,
             timestamp=discord.utils.utcnow(),
         )
-        .set_footer(text="FightLab.net")
+        .set_footer(text="FightLabMC.net")
     )
     view = ClosedTicketView()
     msg = await channel.send(embed=embed, view=view)
@@ -1688,7 +1924,7 @@ async def ticketpanel(
             description="Select a topic and press the button to create a ticket. Our team will help you as soon as possible.",
             color=0x00FFAA,
         )
-        .set_footer(text="FightLab.net")
+        .set_footer(text="FightLabMC.net")
     )
     view = TicketPanelView(topics)
     target = channel or ctx.channel
@@ -1699,6 +1935,29 @@ async def ticketpanel(
     save_ticket_data()
     await ctx.respond(
         f"Ticket panel created in {target.mention}.", ephemeral=True
+    )
+
+
+@bot.slash_command(
+    name="get-access-code",
+    description="Generates a dashboard access code (Team)",
+)
+async def get_access_code(ctx: discord.ApplicationContext):
+    if TEAM_ROLE_ID and not any(role.id == TEAM_ROLE_ID for role in ctx.author.roles):
+        await ctx.respond(
+            "You are not allowed to generate access codes.", ephemeral=True
+        )
+        return
+    global dashboard_code, dashboard_code_expires
+    dashboard_code = "".join(
+        secrets.choice(DASHBOARD_CODE_ALPHABET) for _ in range(6)
+    )
+    dashboard_code_expires = time.time() + ACCESS_CODE_LIFETIME
+    await ctx.respond(
+        f"Dashboard access code: `{dashboard_code}`\n"
+        f"Valid for {ACCESS_CODE_LIFETIME // 60} minutes and valid for one login.\n"
+        f"Open {BASE_URL}/dashboard",
+        ephemeral=True,
     )
 
 
@@ -1735,7 +1994,7 @@ async def bug(
             description=bug,
             color=0xE67E22,
         )
-        .set_footer(text="FightLab.net")
+        .set_footer(text="FightLabMC.net")
     )
     await ctx.respond(embed=embed, ephemeral=True)
 
@@ -1828,7 +2087,7 @@ async def report(
             description=f"{player.mention} has been reported.",
             color=0xE74C3C,
         )
-        .set_footer(text="FightLab.net")
+        .set_footer(text="FightLabMC.net")
     )
     await ctx.respond(embed=embed, ephemeral=True)
 
@@ -1911,12 +2170,12 @@ async def check_spam(message):
             discord.Embed(
                 title="Antispam Warning",
                 description=(
-                    "You have been spamming in the FightLab.net Discord server.\n"
+                    "You have been spamming in the FightLabMC.net Discord server.\n"
                     "Please slow down. Repeated spam can lead to a punishment."
                 ),
                 color=0xE74C3C,
             )
-            .set_footer(text="FightLab.net")
+            .set_footer(text="FightLabMC.net")
         )
         await message.author.send(embed=embed)
     except discord.HTTPException:
