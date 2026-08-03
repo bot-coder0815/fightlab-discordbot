@@ -85,6 +85,13 @@ def build_role_language_map() -> dict[str, str]:
 
 ROLE_LANGUAGE_MAP = build_role_language_map()
 
+LANGUAGE_ALIASES = {
+    "de": {"de", "deutsch", "german"},
+    "en": {"en", "english", "englisch"},
+    "fr": {"fr", "francais", "franais", "français", "french", "französisch", "franzoesisch", "franzsisch"},
+    "es": {"es", "espanol", "espaol", "español", "spanish", "spanisch"},
+}
+
 
 def load_language_config():
     global language_config
@@ -108,6 +115,13 @@ def get_user_language(member) -> str:
         code = ROLE_LANGUAGE_MAP.get(str(role.id))
         if code:
             return code
+    for role in member.roles:
+        name = re.sub(r"[^a-zA-Z0-9_]", "", role.name).lower()
+        for code, aliases in LANGUAGE_ALIASES.items():
+            if name in aliases:
+                return code
+            if any(name.endswith("_" + alias) for alias in aliases):
+                return code
     return language_config.get("default_language", "en")
 
 

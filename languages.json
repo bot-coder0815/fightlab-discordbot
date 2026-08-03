@@ -1,5 +1,5 @@
 {
-  "_readme": "Sprachzuordnung erfolgt in der .env-Datei: ROLLE_ID_<CODE>=<Rollen-ID> (z.B. ROLLE_ID_ES=123456789). Mitglieder mit dieser Rolle bekommen die Ticket-Modals in dieser Sprache. Ohne passende Rolle gilt default_language. Verfügbare Codes: de, en, fr, es.",
+  "_readme": "Sprachzuordnung: (1) in der .env-Datei ROLLE_ID_<CODE>=<Rollen-ID> setzen (z.B. ROLLE_ID_ES=123456789) oder (2) Rollennamen verwenden - die Sprache wird dann automatisch erkannt (z.B. \"German\", \"Deutsch\", \"English\", \"Français\", \"Spanish\"). Ohne passende Rolle gilt default_language. Verfügbare Codes: de, en, fr, es.",
   "default_language": "en",
   "strings": {
     "en": {
