@@ -211,7 +211,6 @@ async def on_member_join(member):
     guild = member.guild
     guild_id = str(guild.id)
     joined_via = None
-    joined_code = None
 
     try:
         invites = await guild.invites()
@@ -225,7 +224,6 @@ async def on_member_join(member):
         old = old_cache.get(code)
         if old is not None and uses > old["uses"]:
             joined_via = old["inviter"]
-            joined_code = code
             old_cache[code]["uses"] = uses
             break
 
@@ -253,7 +251,6 @@ async def on_member_join(member):
     if JOIN_LOG_CHANNEL_ID:
         channel = guild.get_channel(int(JOIN_LOG_CHANNEL_ID))
         if channel:
-            inviter = guild.get_member(int(joined_via)) if joined_via else None
             created = member.created_at
             account_age_days = (
                 (discord.utils.utcnow() - created).days if created else None
@@ -262,12 +259,10 @@ async def on_member_join(member):
                 discord.Embed(
                     title="Member joined",
                     description=(
-                        f"{member.mention} (`{member.id}`)\n"
+                        f"Welcome to FightLabMC.net, {member.display_name} ({member.mention})! 🎉\n"
                         f"**Account created:** "
                         f"{created.strftime('%Y-%m-%d') if created else 'unknown'} "
                         f"({account_age_days} days ago)"
-                        + (f"\n**Invited by:** {inviter.mention}" if inviter else "")
-                        + (f"\n**Invite code:** {joined_code}" if joined_code else "")
                     ),
                     color=0x2ECC71,
                     timestamp=discord.utils.utcnow(),
