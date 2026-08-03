@@ -1825,19 +1825,7 @@ async def ticket_claim(ctx: discord.ApplicationContext):
         await ctx.followup.send("You don't have permission.", ephemeral=True)
         return
     ticket_record["claimed_by"] = str(ctx.author.id)
-    save_ticket_data()
-    settings = get_ticket_settings(ctx.guild.id)
-    claimed_category = ctx.guild.get_channel(int(settings["claimed_category_id"])) if settings.get(
-        "claimed_category_id"
-    ) else None
-    if claimed_category and ctx.channel.category_id != claimed_category.id:
-        await ctx.channel.edit(category=claimed_category)
-    embed = discord.Embed(
-        description=f"{ctx.author.mention} has claimed this ticket.",
-        color=0x3498DB,
-        timestamp=discord.utils.utcnow(),
-    )
-    await ctx.channel.send(embed=embed)
+    await auto_claim_ticket(ticket_record, ctx.author, ctx.channel)
     await ctx.followup.send("Ticket claimed.", ephemeral=True)
 
 
@@ -2548,6 +2536,41 @@ async def on_message(message):
         ticket_record["last_user_activity"] = now_iso()
         await try_capture_logs(message, ticket_record)
         save_ticket_data()
+    elif (
+        message.guild
+        and ticket_record.get("claimed_by") is None
+        and is_staff(message.author, message.guild.id)
+    ):
+        await auto_claim_ticket(ticket_record, message.author, message.channel)
+
+
+async def resolve_claimed_category(guild, settings):
+    claimed_category = None
+    claimed_category_id = settings.get("claimed_category_id") or ""
+    if claimed_category_id:
+        try:
+            claimed_category = guild.get_channel(int(claimed_category_id))
+        except (ValueError, TypeError):
+            claimed_category = None
+    return claimed_category
+
+
+async def auto_claim_ticket(ticket_record, member, channel):
+    ticket_record["claimed_by"] = str(member.id)
+    save_ticket_data()
+    settings = get_ticket_settings(channel.guild.id) if channel.guild else {}
+    claimed_category = await resolve_claimed_category(channel.guild, settings) if channel.guild else None
+    if claimed_category and channel.category_id != claimed_category.id:
+        try:
+            await channel.edit(category=claimed_category)
+        except discord.HTTPException:
+            pass
+    embed = discord.Embed(
+        description=f"{member.mention} has claimed this ticket.",
+        color=0x3498DB,
+        timestamp=discord.utils.utcnow(),
+    )
+    await channel.send(embed=embed)
 
 
 async def try_capture_logs(message, ticket_record):
