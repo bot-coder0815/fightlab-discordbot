@@ -16,6 +16,9 @@ load_dotenv(override=True)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.getenv("DATA_DIR", BASE_DIR)
+data_env_file = os.path.join(DATA_DIR, ".env")
+if os.path.isfile(data_env_file):
+    load_dotenv(data_env_file, override=True)
 DATA_FILE = os.path.join(DATA_DIR, "invites_data.json")
 INVITES_CHANNEL_ID = os.getenv("INVITES_CHANNEL_ID")
 JOIN_LOG_CHANNEL_ID = os.getenv("JOIN_LOG_CHANNEL_ID")
