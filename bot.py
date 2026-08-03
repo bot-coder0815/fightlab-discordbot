@@ -17,7 +17,8 @@ load_dotenv(override=True)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.getenv("DATA_DIR", BASE_DIR)
 data_env_file = os.path.join(DATA_DIR, ".env")
-if os.path.isfile(data_env_file):
+DATA_ENV_LOADED = os.path.isfile(data_env_file)
+if DATA_ENV_LOADED:
     load_dotenv(data_env_file, override=True)
 DATA_FILE = os.path.join(DATA_DIR, "invites_data.json")
 INVITES_CHANNEL_ID = os.getenv("INVITES_CHANNEL_ID")
@@ -33,7 +34,7 @@ WEB_HOST = os.getenv("WEB_HOST", "0.0.0.0")
 WEB_PORT = int(os.getenv("WEB_PORT", "8080"))
 TRANSCRIPTS_DIR = os.path.join(DATA_DIR, "transcripts")
 
-BUILD_TAG = "topics-fallback-fix-2026-08-02"
+BUILD_TAG = "logs-file-fix-2026-08-03"
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 TEAM_ROLE_ID = int(os.getenv("TEAM_ROLE_ID", "0") or 0)
@@ -2531,6 +2532,7 @@ async def autoclose_loop():
 async def on_ready():
     print(f"BUILD: {BUILD_TAG}")
     print(f"Eingeloggt als {bot.user} (ID: {bot.user.id})")
+    print(f"data/.env loaded: {DATA_ENV_LOADED}")
     load_invites_data()
     for guild in bot.guilds:
         print(f"- {guild.name}")
