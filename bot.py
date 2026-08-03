@@ -2388,6 +2388,13 @@ async def on_message(message):
                         if text:
                             combined = combined + "\n" + text if combined else text
                 if not attachments and not looks_like_logs(combined):
+                    print(
+                        "[getlogs] REJECTED reply: "
+                        f"channel={message.channel.id} author={message.author.id} "
+                        f"attachments={len(message.attachments)} "
+                        f"content_len={len(message.content)} "
+                        f"looks_like_logs={looks_like_logs(combined)}"
+                    )
                     embed = discord.Embed(
                         title="Logs not recognized",
                         description=(
