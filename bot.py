@@ -1914,102 +1914,57 @@ MODDED_CLIENT_PATTERN = re.compile(
     re.I,
 )
 
-LOG_ANALYSIS_PATTERNS = [
-    (
-        "Hack Clients",
-        HACK_CLIENT_PATTERN,
-        "Names of known cheat/hack clients found in the log.",
-    ),
-    (
-        "Modded / Unauthorized Client",
-        MODDED_CLIENT_PATTERN,
-        "The server detected a modded or unauthorized client.",
-    ),
-    (
-        "Speed / Wrong Movement",
-        re.compile(
-            r"moved too quickly|moved wrongly|moved at an exceptionally fast speed",
-            re.I,
-        ),
-        "Movement was rejected by the server — typical for speed/fly hacks.",
-    ),
-    (
-        "Flight",
-        re.compile(
-            r"flying is not enabled on this server|kicked for flying|flying (?:without )?(?:enabled )?permission",
-            re.I,
-        ),
-        "The server detected flight without permission.",
-    ),
-    (
-        "KillAura / Combat",
-        re.compile(r"hit out of order|kill aura|killaura", re.I),
-        "Combat packets were rejected — could indicate kill aura.",
-    ),
-    (
-        "Reach",
-        re.compile(r"too far away|moved at an exceptionally fast speed", re.I),
-        "Interactions or movement from too far away.",
-    ),
-    (
-        "Nuker / X-Ray",
-        re.compile(r"\bnuking\b|nuked|\bxray\b|x-ray", re.I),
-        "Mass block breaking or X-Ray behaviour.",
-    ),
-    (
-        "Illegal Items / Blocks",
-        re.compile(
-            r"illegal (?:item|block|action)|unfair advantage|nbt tag", re.I
-        ),
-        "The server flagged illegal items, blocks or NBT data.",
-    ),
-    (
-        "Chat Spam",
-        re.compile(
-            r"you are sending too many messages|spamming|rate.?limited", re.I
-        ),
-        "Excessive chat messages were sent.",
-    ),
-    (
-        "AntiCheat / Watchdog",
-        re.compile(r"\bwatchdog\b|anti.?cheat", re.I),
-        "The server anti-cheat was involved.",
-    ),
-    (
-        "Connection Issues",
-        re.compile(
-            r"connection lost|disconnected|timed out|end of stream", re.I
-        ),
-        "Network or connection problems appear in the log.",
-    ),
-    (
-        "Crash / Exceptions",
-        re.compile(r"fatal|critical error|stacktrace|at net\.|\.java:\d+", re.I),
-        "Errors or exceptions appear in the log.",
-    ),
-]
+MCLOGS_HACK_MOD_RE = re.compile(
+    r"hack|cheat|modded|modified|mod(s|pack)?\b|x-?ray|unfair|forbidden|banned|illegal|tamper",
+    re.I,
+)
 
 
-def analyze_logs(text: str) -> list[dict]:
+def extract_hack_clients(text: str) -> list[str]:
+    names = []
+    for m in HACK_CLIENT_PATTERN.finditer(text or ""):
+        found = (m.group(1) or m.group(0)) if m.groups() else m.group(0)
+        if found.lower() not in names:
+            names.append(found.lower())
+    return names
+
+
+def extract_modded_clients(text: str) -> list[str]:
+    matches = [
+        m.group(0).lower() for m in MODDED_CLIENT_PATTERN.finditer(text or "")
+    ]
+    return sorted(set(matches))
+
+
+async def analyse_logs_mclogs(text: str) -> tuple[bool, list[dict]]:
+    try:
+        async with ClientSession() as session:
+            async with session.post(
+                "https://api.mclo.gs/1/analyse",
+                data={"content": (text or "")[:1_000_000]},
+                timeout=ClientTimeout(total=20),
+            ) as response:
+                if response.status != 200:
+                    print("mclo.gs analyse HTTP status:", response.status)
+                    return False, []
+                data = await response.json()
+    except Exception as exc:
+        print("mclo.gs analyse error:", exc)
+        return False, []
     findings = []
-    for name, pattern, description in LOG_ANALYSIS_PATTERNS:
-        matches = [m for m in pattern.finditer(text or "")]
-        if not matches:
-            continue
-        names = []
-        for m in matches:
-            found = (m.group(1) or m.group(0)) if m.groups() else m.group(0)
-            if found.lower() not in names:
-                names.append(found.lower())
-        findings.append(
-            {
-                "name": name,
-                "count": len(matches),
-                "description": description,
-                "matches": names,
-            }
-        )
-    return findings
+    analysis = data.get("analysis") or {}
+    for group in ("problems", "information"):
+        for entry in analysis.get(group, []):
+            message = entry.get("message") or ""
+            if MCLOGS_HACK_MOD_RE.search(message):
+                findings.append(
+                    {
+                        "group": group,
+                        "message": message,
+                        "count": entry.get("counter", 1),
+                    }
+                )
+    return True, findings
 
 
 @ticket.command(
@@ -2086,31 +2041,42 @@ async def ticket_analyze_logs(ctx: discord.ApplicationContext):
             ephemeral=True,
         )
         return
-    findings = analyze_logs(text)
+    mclogs_ok, mclogs_findings = await analyse_logs_mclogs(text)
+    hack_clients = extract_hack_clients(text)
+    modded_clients = extract_modded_clients(text)
     embed = discord.Embed(
         title="Log Analysis",
         color=0x3498DB,
         timestamp=discord.utils.utcnow(),
     )
-    if not findings:
+    if not (hack_clients or modded_clients or mclogs_findings):
         embed.description = (
-            "No obvious hack or ban indicators found in the provided logs."
+            "No hack clients or mods found that could explain a ban.\n"
+            "(Analysis via mclo.gs)"
         )
     else:
-        embed.description = (
-            f"Found {len(findings)} potential indicator(s) in the logs:"
-        )
-        for finding in findings:
-            value = finding["description"]
-            if finding["matches"]:
-                value = "Detected: " + ", ".join(
-                    sorted(set(finding["matches"]))
-                ) + "\n" + value
+        embed.description = "Possible ban-relevant findings:"
+        if hack_clients:
             embed.add_field(
-                name=f"{finding['name']} ({finding['count']}x)",
-                value=value,
+                name=f"Hack Clients ({len(hack_clients)})",
+                value=", ".join(sorted(set(hack_clients))),
                 inline=False,
             )
+        if modded_clients:
+            embed.add_field(
+                name="Modded / Unauthorized Client",
+                value=", ".join(modded_clients),
+                inline=False,
+            )
+        for finding in mclogs_findings[:10]:
+            suffix = f" (x{finding['count']})" if finding["count"] > 1 else ""
+            embed.add_field(
+                name=f"mclo.gs {finding['group'].capitalize()}{suffix}",
+                value=finding["message"],
+                inline=False,
+            )
+        if not mclogs_ok:
+            embed.description += "\n(Note: mclo.gs unreachable — used local detection)"
     embed.set_footer(text="FightLabMC.net")
     await ctx.followup.send(embed=embed, ephemeral=True)
 
