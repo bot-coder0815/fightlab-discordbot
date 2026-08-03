@@ -8,7 +8,7 @@ import time
 from datetime import datetime, timedelta, timezone
 
 import discord
-from aiohttp import web
+from aiohttp import ClientSession, ClientTimeout, web
 from dotenv import load_dotenv
 from googletrans import Translator
 
@@ -1852,6 +1852,121 @@ async def ticket_admindelete(ctx: discord.ApplicationContext):
     await delete_ticket(ctx.channel)
 
 
+LOG_TEXT_MARKERS = re.compile(
+    r"\[\d{1,2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:]|\s)"
+    r"|\[[A-Za-z][A-Za-z0-9 /_-]*?/?(?:INFO|WARN|ERROR|DEBUG|FATAL)]"
+    r"|\b(?:INFO|WARN|ERROR|DEBUG|FATAL)\b:"
+)
+LOG_KEYWORDS = (
+    "minecraft",
+    "net.minecraft",
+    "server thread",
+    "client thread",
+    "main thread",
+    "exception",
+)
+
+
+def looks_like_logs(text: str) -> bool:
+    if not text or not text.strip():
+        return False
+    if len(LOG_TEXT_MARKERS.findall(text)) >= 2:
+        return True
+    lowered = text.lower()
+    return any(kw in lowered for kw in LOG_KEYWORDS)
+
+
+async def download_log_attachment(url: str, max_bytes: int = 400_000) -> str:
+    try:
+        async with ClientSession() as session:
+            async with session.get(
+                url, timeout=ClientTimeout(total=15)
+            ) as response:
+                if response.status == 200:
+                    data = await response.read()
+                    if len(data) > max_bytes:
+                        data = data[:max_bytes]
+                    return data.decode("utf-8", errors="replace")
+    except Exception as exc:
+        print(f"Could not download log attachment: {exc}")
+    return ""
+
+
+LOG_ANALYSIS_PATTERNS = [
+    (
+        "Speed / Wrong Movement",
+        re.compile(
+            r"moved too quickly|moved wrongly|moved at an exceptionally fast speed",
+            re.I,
+        ),
+        "Movement was rejected by the server — typical for speed/fly hacks.",
+    ),
+    (
+        "Flight",
+        re.compile(
+            r"flying is not enabled on this server|kicked for flying|flying (?:without )?(?:enabled )?permission",
+            re.I,
+        ),
+        "The server detected flight without permission.",
+    ),
+    (
+        "KillAura / Combat",
+        re.compile(r"hit out of order|kill aura|killaura", re.I),
+        "Combat packets were rejected — could indicate kill aura.",
+    ),
+    (
+        "Reach",
+        re.compile(r"too far away|moved at an exceptionally fast speed", re.I),
+        "Interactions or movement from too far away.",
+    ),
+    (
+        "Nuker / X-Ray",
+        re.compile(r"\bnuking\b|nuked|\bxray\b|x-ray", re.I),
+        "Mass block breaking or X-Ray behaviour.",
+    ),
+    (
+        "Illegal Items / Blocks",
+        re.compile(
+            r"illegal (?:item|block|action)|unfair advantage|nbt tag", re.I
+        ),
+        "The server flagged illegal items, blocks or NBT data.",
+    ),
+    (
+        "Chat Spam",
+        re.compile(
+            r"you are sending too many messages|spamming|rate.?limited", re.I
+        ),
+        "Excessive chat messages were sent.",
+    ),
+    (
+        "AntiCheat / Watchdog",
+        re.compile(r"\bwatchdog\b|anti.?cheat", re.I),
+        "The server anti-cheat was involved.",
+    ),
+    (
+        "Connection Issues",
+        re.compile(
+            r"connection lost|disconnected|timed out|end of stream", re.I
+        ),
+        "Network or connection problems appear in the log.",
+    ),
+    (
+        "Crash / Exceptions",
+        re.compile(r"fatal|critical error|stacktrace|at net\.|\.java:\d+", re.I),
+        "Errors or exceptions appear in the log.",
+    ),
+]
+
+
+def analyze_logs(text: str) -> list[tuple[str, int, str]]:
+    findings = []
+    for name, pattern, description in LOG_ANALYSIS_PATTERNS:
+        count = len(pattern.findall(text or ""))
+        if count:
+            findings.append((name, count, description))
+    return findings
+
+
 @ticket.command(
     name="getlogs",
     description="Requests the logs of the ticket creator (Ban Appeal)",
@@ -1890,6 +2005,62 @@ async def ticket_getlogs(ctx: discord.ApplicationContext):
     await ctx.followup.send(
         "Logs requested. Waiting for the reply…", ephemeral=True
     )
+
+
+@ticket.command(
+    name="analyze-logs",
+    description="Analyzes the ticket logs for possible hack/ban indicators (Ban Appeal)",
+)
+async def ticket_analyze_logs(ctx: discord.ApplicationContext):
+    await ctx.defer(ephemeral=True)
+    ticket_record = get_ticket(ctx.channel_id)
+    if not ticket_record:
+        await ctx.followup.send("This is not a ticket channel.", ephemeral=True)
+        return
+    if topic_kind(ticket_record.get("topic", "")) != "ban_appeal":
+        await ctx.followup.send(
+            "This command is only available in Ban Appeal tickets.", ephemeral=True
+        )
+        return
+    if str(ctx.author.id) != ticket_record["creator"] and not is_staff(
+        ctx.author, ctx.guild.id
+    ):
+        await ctx.followup.send("You don't have permission.", ephemeral=True)
+        return
+    logs = ticket_record.get("logs")
+    if not logs:
+        await ctx.followup.send(
+            "No logs available yet. Use /ticket getlogs and wait for the reply.",
+            ephemeral=True,
+        )
+        return
+    text = logs.get("text") or logs.get("content") or ""
+    if not text.strip():
+        await ctx.followup.send(
+            "The logs were only provided as files and could not be read for analysis.",
+            ephemeral=True,
+        )
+        return
+    findings = analyze_logs(text)
+    embed = discord.Embed(
+        title="Log Analysis",
+        color=0x3498DB,
+        timestamp=discord.utils.utcnow(),
+    )
+    if not findings:
+        embed.description = (
+            "No obvious hack or ban indicators found in the provided logs."
+        )
+    else:
+        embed.description = (
+            f"Found {len(findings)} potential indicator(s) in the logs:"
+        )
+        for name, count, description in findings:
+            embed.add_field(
+                name=f"{name} ({count}x)", value=description, inline=False
+            )
+    embed.set_footer(text="FightLabMC.net")
+    await ctx.followup.send(embed=embed, ephemeral=True)
 
 
 @bot.slash_command(
@@ -2205,9 +2376,31 @@ async def on_message(message):
                 expires = None
             if expires and datetime.now(timezone.utc) <= expires:
                 attachments = [attachment.url for attachment in message.attachments]
+                combined = message.content
+                if attachments:
+                    for url in attachments:
+                        text = await download_log_attachment(url)
+                        if text:
+                            combined = combined + "\n" + text if combined else text
+                if not (attachments or looks_like_logs(combined)):
+                    embed = discord.Embed(
+                        title="Logs not recognized",
+                        description=(
+                            "That does not look like logs. Please reply to the logs "
+                            "request with your logs as a file or as text with "
+                            "timestamps (e.g. `[12:34:56] [Server thread/INFO]: ...`).\n"
+                            "You can try again — the request is still valid."
+                        ),
+                        color=0xE74C3C,
+                        timestamp=discord.utils.utcnow(),
+                    )
+                    await message.channel.send(embed=embed)
+                    save_ticket_data()
+                    return
                 ticket_record["logs"] = {
                     "content": message.content,
                     "attachments": attachments,
+                    "text": combined,
                     "received_at": now_iso(),
                 }
                 ticket_record.pop("logs_request_msg_id", None)
