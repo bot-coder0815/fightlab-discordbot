@@ -2040,6 +2040,16 @@ async def on_ready():
     load_ticket_data()
     load_language_config()
     print("Role-language map:", build_role_language_map())
+    if JOIN_LOG_CHANNEL_ID:
+        join_channel = bot.get_channel(int(JOIN_LOG_CHANNEL_ID))
+        if join_channel:
+            print(f"Join log channel found: #{join_channel.name} ({join_channel.id})")
+        else:
+            print(
+                f"WARNING: Join log channel {JOIN_LOG_CHANNEL_ID} not found or not cached"
+            )
+    else:
+        print("Join log disabled (JOIN_LOG_CHANNEL_ID not set)")
     panel_topics = load_ticket_topics()
     print("Ticket topics:", panel_topics)
     for settings in tickets_data["settings"].values():
