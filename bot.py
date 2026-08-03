@@ -69,6 +69,36 @@ bugs_data: dict = {"counter": 0, "bugs": []}
 REPORTS_DATA_FILE = os.path.join(DATA_DIR, "reports_data.json")
 reports_data: dict = {"counter": 0, "reports": []}
 
+STATUS_DATA_FILE = os.path.join(DATA_DIR, "bot_status.json")
+DEFAULT_SAVED_STATUS = "online"
+STATUS_MAP = {
+    "online": discord.Status.online,
+    "idle": discord.Status.idle,
+    "dnd": discord.Status.dnd,
+    "invisible": discord.Status.offline,
+}
+
+
+def load_saved_status() -> str:
+    if os.path.exists(STATUS_DATA_FILE):
+        try:
+            with open(STATUS_DATA_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            mode = data.get("status", DEFAULT_SAVED_STATUS)
+            if mode in STATUS_MAP:
+                return mode
+        except (json.JSONDecodeError, OSError, ValueError):
+            pass
+    return DEFAULT_SAVED_STATUS
+
+
+def save_saved_status(mode: str) -> None:
+    try:
+        with open(STATUS_DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump({"status": mode}, f, indent=2)
+    except OSError:
+        pass
+
 ANTISPAM_WINDOW = 5.0
 ANTISPAM_MAX_MESSAGES = 5
 ANTISPAM_DUPES = 3
@@ -2327,13 +2357,8 @@ async def status(
             "You need administrator permissions.", ephemeral=True
         )
         return
-    status_map = {
-        "online": discord.Status.online,
-        "idle": discord.Status.idle,
-        "dnd": discord.Status.dnd,
-        "invisible": discord.Status.invisible,
-    }
-    await bot.change_presence(status=status_map[mode], activity=BOT_ACTIVITY)
+    save_saved_status(mode)
+    await bot.change_presence(status=STATUS_MAP[mode], activity=BOT_ACTIVITY)
     await ctx.followup.send(f"Status changed to **{mode}**.", ephemeral=True)
 
 
@@ -2782,9 +2807,11 @@ async def on_ready():
     load_ticket_data()
     load_language_config()
     print("Role-language map:", build_role_language_map())
+    saved_status = load_saved_status()
     await bot.change_presence(
-        status=discord.Status.online, activity=BOT_ACTIVITY
+        status=STATUS_MAP[saved_status], activity=BOT_ACTIVITY
     )
+    print(f"Restored bot status: {saved_status}")
     if JOIN_LOG_CHANNEL_ID:
         join_channel = bot.get_channel(int(JOIN_LOG_CHANNEL_ID))
         if join_channel:
