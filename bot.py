@@ -2303,8 +2303,43 @@ async def get_access_code(ctx: discord.ApplicationContext):
 
 
 @bot.slash_command(
+    name="status",
+    description="Change bot status (Admin)",
+)
+async def status(
+    ctx: discord.ApplicationContext,
+    mode: discord.Option(
+        str,
+        "Select the new status",
+        choices=[
+            discord.OptionChoice(name="🟢 Online", value="online"),
+            discord.OptionChoice(name="🟡 Idle / Sleep", value="idle"),
+            discord.OptionChoice(name="🔴 Do Not Disturb", value="dnd"),
+            discord.OptionChoice(name="⚫ Invisible", value="invisible"),
+        ],
+    ),
+):
+    await ctx.defer(ephemeral=True)
+    if not ctx.author.guild_permissions.administrator:
+        await ctx.followup.send(
+            "You need administrator permissions.", ephemeral=True
+        )
+        return
+    status_map = {
+        "online": discord.Status.online,
+        "idle": discord.Status.idle,
+        "dnd": discord.Status.dnd,
+        "invisible": discord.Status.invisible,
+    }
+    activity = discord.Game(name="/help | Minecraft Plugins")
+    await bot.change_presence(status=status_map[mode], activity=activity)
+    await ctx.followup.send(f"Status changed to **{mode}**.", ephemeral=True)
+
+
+@bot.slash_command(
     name="bug",
     description="Reports a bug",
+    default_member_permissions=discord.Permissions(administrator=True),
 )
 async def bug(
     ctx: discord.ApplicationContext,
