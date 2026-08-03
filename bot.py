@@ -2182,9 +2182,7 @@ async def ticket_analyze_logs(ctx: discord.ApplicationContext):
             "This command is only available in Ban Appeal tickets.", ephemeral=True
         )
         return
-    if str(ctx.author.id) != ticket_record["creator"] and not is_staff(
-        ctx.author, ctx.guild.id
-    ):
+    if not is_staff(ctx.author, ctx.guild.id):
         await ctx.followup.send("You don't have permission.", ephemeral=True)
         return
     logs = ticket_record.get("logs")
