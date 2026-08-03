@@ -1649,12 +1649,14 @@ async def ticketpanel(
     )
     view = TicketPanelView(topics)
     target = channel or ctx.channel
-    await ctx.defer()
-    msg = await ctx.followup.send(embed=embed, view=view)
+    msg = await target.send(embed=embed, view=view)
     bot.add_view(view, message_id=msg.id)
     settings["panel_message_id"] = str(msg.id)
     settings["panel_channel_id"] = str(target.id)
     save_ticket_data()
+    await ctx.respond(
+        f"Ticket panel created in {target.mention}.", ephemeral=True
+    )
 
 
 @bot.slash_command(
