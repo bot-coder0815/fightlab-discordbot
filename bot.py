@@ -2382,13 +2382,18 @@ async def on_message(message):
                         text = await download_log_attachment(url)
                         if text:
                             combined = combined + "\n" + text if combined else text
-                if not (attachments or looks_like_logs(combined)):
+                if combined.strip():
+                    valid = looks_like_logs(combined)
+                else:
+                    valid = bool(attachments)
+                if not valid:
                     embed = discord.Embed(
                         title="Logs not recognized",
                         description=(
-                            "That does not look like logs. Please reply to the logs "
-                            "request with your logs as a file or as text with "
-                            "timestamps (e.g. `[12:34:56] [Server thread/INFO]: ...`).\n"
+                            "That does not look like logs (attached files were checked "
+                            "too). Please reply to the logs request with your logs as "
+                            "a file or as text with timestamps (e.g. "
+                            "`[12:34:56] [Server thread/INFO]: ...`).\n"
                             "You can try again — the request is still valid."
                         ),
                         color=0xE74C3C,
