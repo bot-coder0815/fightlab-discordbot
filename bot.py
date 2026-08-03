@@ -67,6 +67,62 @@ LANGUAGES = {
     "es": "Español",
 }
 
+LANGUAGE_CONFIG_FILE = os.path.join(DATA_DIR, "languages.json")
+language_config: dict = {
+    "default_language": "en",
+    "strings": {},
+}
+
+
+def build_role_language_map() -> dict[str, str]:
+    role_map = {}
+    for code in LANGUAGES:
+        role_id = os.getenv(f"ROLLE_ID_{code.upper()}")
+        if role_id:
+            role_map[str(role_id)] = code
+    return role_map
+
+
+ROLE_LANGUAGE_MAP = build_role_language_map()
+
+
+def load_language_config():
+    global language_config
+    candidates = [LANGUAGE_CONFIG_FILE, os.path.join(BASE_DIR, "languages.json")]
+    for path in candidates:
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    language_config = data
+                    break
+            except (json.JSONDecodeError, OSError):
+                continue
+    language_config.setdefault("default_language", "en")
+    language_config.setdefault("strings", {})
+
+
+def get_user_language(member) -> str:
+    for role in member.roles:
+        code = ROLE_LANGUAGE_MAP.get(str(role.id))
+        if code:
+            return code
+    return language_config.get("default_language", "en")
+
+
+def tr(lang: str, key: str, **kwargs) -> str:
+    strings = language_config.get("strings", {})
+    value = strings.get(lang, {}).get(key)
+    if value is None:
+        value = strings.get("en", {}).get(key, key)
+    if kwargs:
+        try:
+            value = value.format(**kwargs)
+        except (KeyError, IndexError):
+            pass
+    return value
+
 
 def load_invites_data():
     global invites_data
@@ -488,22 +544,28 @@ def topic_kind(topic: str) -> str | None:
 
 
 class BaseAppModal(discord.ui.Modal):
-    def __init__(self, *children, title: str, guild, creator, topic: str):
+    def __init__(self, *children, title: str, guild, creator, topic: str, lang: str):
         super().__init__(*children, title=title)
         self.guild = guild
         self.creator = creator
         self.topic = topic
+        self.lang = lang
 
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
         ok, result = await create_ticket(
-            interaction, self.guild, self.creator, self.topic, details=self.details()
+            interaction,
+            self.guild,
+            self.creator,
+            self.topic,
+            details=self.details(),
+            lang=self.lang,
         )
         if not ok:
             await interaction.followup.send(result, ephemeral=True)
             return
         await interaction.followup.send(
-            f"Your ticket has been created: {result.mention}", ephemeral=True
+            tr(self.lang, "ticket_created", channel=result.mention), ephemeral=True
         )
 
     def details(self) -> dict:
@@ -526,28 +588,33 @@ def parse_ban_date(value: str):
 
 
 class BanAppealModal(BaseAppModal):
-    ingame = discord.ui.InputText(label="In-Game Name", required=True, max_length=100)
-    age = discord.ui.InputText(label="Age", required=True, max_length=10)
-    ban_date = discord.ui.InputText(
-        label="Ban Date (DD-MM-YYYY)", required=True, max_length=10
-    )
-    reason = discord.ui.InputText(
-        label="Reason why you should be unbanned",
-        style=discord.InputTextStyle.paragraph,
-        required=True,
-        max_length=1000,
-    )
-
-    def __init__(self, guild, creator, topic: str):
+    def __init__(self, guild, creator, topic: str, lang: str):
+        self.lang = lang
+        self.ingame = discord.ui.InputText(
+            label=tr(lang, "ban_ingame"), required=True, max_length=100
+        )
+        self.age = discord.ui.InputText(
+            label=tr(lang, "ban_age"), required=True, max_length=10
+        )
+        self.ban_date = discord.ui.InputText(
+            label=tr(lang, "ban_date"), required=True, max_length=10
+        )
+        self.reason = discord.ui.InputText(
+            label=tr(lang, "ban_reason"),
+            style=discord.InputTextStyle.paragraph,
+            required=True,
+            max_length=1000,
+        )
         super().__init__(
             self.ingame,
             self.age,
             self.ban_date,
             self.reason,
-            title="Ban Appeal",
+            title=tr(lang, "ban_title"),
             guild=guild,
             creator=creator,
             topic=topic,
+            lang=lang,
         )
 
     async def callback(self, interaction: discord.Interaction):
@@ -557,7 +624,7 @@ class BanAppealModal(BaseAppModal):
         except ValueError:
             print("BanAppealModal: invalid ban date:", repr(raw))
             await interaction.response.send_message(
-                "Please enter the ban date in DD-MM-YYYY format.", ephemeral=True
+                tr(self.lang, "ban_invalid_date"), ephemeral=True
             )
             return
         await super().callback(interaction)
@@ -572,33 +639,40 @@ class BanAppealModal(BaseAppModal):
 
 
 class ApplyModal(BaseAppModal):
-    ingame = discord.ui.InputText(label="In-Game Name", required=True, max_length=100)
-    age = discord.ui.InputText(label="Age", required=True, max_length=10)
-    language = discord.ui.InputText(label="Language", required=True, max_length=100)
-    experience = discord.ui.InputText(
-        label="Support Experience (incl. duration)",
-        style=discord.InputTextStyle.paragraph,
-        required=True,
-        max_length=1000,
-    )
-    why_us = discord.ui.InputText(
-        label="Why should we take you",
-        style=discord.InputTextStyle.paragraph,
-        required=True,
-        max_length=1000,
-    )
-
-    def __init__(self, guild, creator, topic: str):
+    def __init__(self, guild, creator, topic: str, lang: str):
+        self.lang = lang
+        self.ingame = discord.ui.InputText(
+            label=tr(lang, "apply_ingame"), required=True, max_length=100
+        )
+        self.age = discord.ui.InputText(
+            label=tr(lang, "apply_age"), required=True, max_length=10
+        )
+        self.language = discord.ui.InputText(
+            label=tr(lang, "apply_language"), required=True, max_length=100
+        )
+        self.experience = discord.ui.InputText(
+            label=tr(lang, "apply_experience"),
+            style=discord.InputTextStyle.paragraph,
+            required=True,
+            max_length=1000,
+        )
+        self.why_us = discord.ui.InputText(
+            label=tr(lang, "apply_why_us"),
+            style=discord.InputTextStyle.paragraph,
+            required=True,
+            max_length=1000,
+        )
         super().__init__(
             self.ingame,
             self.age,
             self.language,
             self.experience,
             self.why_us,
-            title="Application",
+            title=tr(lang, "apply_title"),
             guild=guild,
             creator=creator,
             topic=topic,
+            lang=lang,
         )
 
     def details(self) -> dict:
@@ -612,34 +686,35 @@ class ApplyModal(BaseAppModal):
 
 
 class CooperationModal(BaseAppModal):
-    org_name = discord.ui.InputText(
-        label="Name of the Organization", required=True, max_length=100
-    )
-    leader_age = discord.ui.InputText(
-        label="Age of the Leader/Representative", required=True, max_length=10
-    )
-    content_type = discord.ui.InputText(
-        label="Type of Content the Organization brings",
-        style=discord.InputTextStyle.paragraph,
-        required=True,
-        max_length=1000,
-    )
-    socials = discord.ui.InputText(
-        label="Website / Social Media",
-        required=False,
-        max_length=500,
-    )
-
-    def __init__(self, guild, creator, topic: str):
+    def __init__(self, guild, creator, topic: str, lang: str):
+        self.lang = lang
+        self.org_name = discord.ui.InputText(
+            label=tr(lang, "coop_org_name"), required=True, max_length=100
+        )
+        self.leader_age = discord.ui.InputText(
+            label=tr(lang, "coop_leader_age"), required=True, max_length=10
+        )
+        self.content_type = discord.ui.InputText(
+            label=tr(lang, "coop_content_type"),
+            style=discord.InputTextStyle.paragraph,
+            required=True,
+            max_length=1000,
+        )
+        self.socials = discord.ui.InputText(
+            label=tr(lang, "coop_socials"),
+            required=False,
+            max_length=500,
+        )
         super().__init__(
             self.org_name,
             self.leader_age,
             self.content_type,
             self.socials,
-            title="Cooperation",
+            title=tr(lang, "coop_title"),
             guild=guild,
             creator=creator,
             topic=topic,
+            lang=lang,
         )
 
     def details(self) -> dict:
@@ -652,13 +727,14 @@ class CooperationModal(BaseAppModal):
 
 
 def get_topic_modal(guild, creator, topic: str):
+    lang = get_user_language(creator)
     kind = topic_kind(topic)
     if kind == "ban_appeal":
-        return BanAppealModal(guild, creator, topic)
+        return BanAppealModal(guild, creator, topic, lang)
     if kind == "apply":
-        return ApplyModal(guild, creator, topic)
+        return ApplyModal(guild, creator, topic, lang)
     if kind == "cooperation":
-        return CooperationModal(guild, creator, topic)
+        return CooperationModal(guild, creator, topic, lang)
     return None
 
 
@@ -686,7 +762,9 @@ async def strip_view(channel, message_id):
         pass
 
 
-async def create_ticket(interaction, guild, creator, topic: str, details: dict | None = None):
+async def create_ticket(
+    interaction, guild, creator, topic: str, details: dict | None = None, lang: str = "en"
+):
     settings = get_ticket_settings(guild.id)
     category = guild.get_channel(int(settings["category_id"])) if settings.get(
         "category_id"
@@ -695,14 +773,14 @@ async def create_ticket(interaction, guild, creator, topic: str, details: dict |
         "support_role_id"
     ) else None
     if not category or not support_role:
-        return False, "The ticket system is not configured correctly. Please contact an admin."
+        return False, tr(lang, "not_configured")
     for ticket in tickets_data["tickets"].values():
         if (
             ticket.get("guild_id") == str(guild.id)
             and str(creator.id) == ticket.get("creator")
             and ticket.get("status") == "open"
         ):
-            return False, "You already have an open ticket."
+            return False, tr(lang, "already_open_ticket")
     number = tickets_data["counter"] + 1
     tickets_data["counter"] = number
     channel_name = f"ticket-{number}-{sanitize_channel_name(creator.name)}"
@@ -1111,11 +1189,11 @@ class TicketPanelView(discord.ui.View):
         self.add_item(button)
 
     async def create_ticket_button(self, interaction):
+        lang = get_user_language(interaction.user)
         topic = panel_selections.get((interaction.message.id, interaction.user.id))
         if not topic:
             await interaction.response.send_message(
-                "Please select a topic first. No ticket has been created.",
-                ephemeral=True,
+                tr(lang, "select_topic_first"), ephemeral=True
             )
             return
         modal = get_topic_modal(interaction.guild, interaction.user, topic)
@@ -1124,13 +1202,13 @@ class TicketPanelView(discord.ui.View):
             return
         await interaction.response.defer(ephemeral=True)
         ok, result = await create_ticket(
-            interaction, interaction.guild, interaction.user, topic
+            interaction, interaction.guild, interaction.user, topic, lang=lang
         )
         if not ok:
             await interaction.followup.send(result, ephemeral=True)
             return
         await interaction.followup.send(
-            f"Your ticket has been created: {result.mention}", ephemeral=True
+            tr(lang, "ticket_created", channel=result.mention), ephemeral=True
         )
 
 
@@ -1374,16 +1452,19 @@ async def ticket_create(
         choices=[discord.OptionChoice(name=t, value=t) for t in load_ticket_topics()],
     ),
 ):
+    lang = get_user_language(ctx.author)
     modal = get_topic_modal(ctx.guild, ctx.author, topic)
     if modal is not None:
         await ctx.send_modal(modal)
         return
     await ctx.defer(ephemeral=True)
-    ok, result = await create_ticket(ctx, ctx.guild, ctx.author, topic)
+    ok, result = await create_ticket(ctx, ctx.guild, ctx.author, topic, lang=lang)
     if not ok:
         await ctx.followup.send(result, ephemeral=True)
         return
-    await ctx.followup.send(f"Ticket created: {result.mention}", ephemeral=True)
+    await ctx.followup.send(
+        tr(lang, "ticket_created", channel=result.mention), ephemeral=True
+    )
 
 
 @ticket.command(name="close", description="Closes the ticket")
@@ -1908,6 +1989,7 @@ async def on_ready():
         invites_data["invite_cache"][str(guild.id)] = await fetch_invite_cache(guild)
     save_invites_data()
     load_ticket_data()
+    load_language_config()
     panel_topics = load_ticket_topics()
     print("Ticket topics:", panel_topics)
     for settings in tickets_data["settings"].values():
