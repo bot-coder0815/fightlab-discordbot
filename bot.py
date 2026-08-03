@@ -2369,61 +2369,83 @@ async def on_message(message):
         return
     if str(message.author.id) == ticket_record["creator"]:
         ticket_record["last_user_activity"] = now_iso()
-        request_id = ticket_record.get("logs_request_msg_id")
-        if (
-            request_id
-            and message.reference
-            and str(message.reference.message_id) == request_id
-        ):
-            try:
-                expires = datetime.fromisoformat(ticket_record["logs_request_expires"])
-            except (ValueError, TypeError):
-                expires = None
-            if expires and datetime.now(timezone.utc) <= expires:
-                attachments = [attachment.url for attachment in message.attachments]
-                combined = message.content
-                if attachments:
-                    for url in attachments:
-                        text = await download_log_attachment(url)
-                        if text:
-                            combined = combined + "\n" + text if combined else text
-                if not attachments and not looks_like_logs(combined):
-                    print(
-                        "[getlogs] REJECTED reply: "
-                        f"channel={message.channel.id} author={message.author.id} "
-                        f"attachments={len(message.attachments)} "
-                        f"content_len={len(message.content)} "
-                        f"looks_like_logs={looks_like_logs(combined)}"
-                    )
-                    embed = discord.Embed(
-                        title="Logs not recognized",
-                        description=(
-                            "That does not look like logs. Please reply to the logs "
-                            "request with your logs as a file or as text with "
-                            "timestamps (e.g. `[12:34:56] [Server thread/INFO]: ...`).\n"
-                            "You can try again — the request is still valid."
-                        ),
-                        color=0xE74C3C,
-                        timestamp=discord.utils.utcnow(),
-                    )
-                    await message.channel.send(embed=embed)
-                    save_ticket_data()
-                    return
-                ticket_record["logs"] = {
-                    "content": message.content,
-                    "attachments": attachments,
-                    "text": combined,
-                    "received_at": now_iso(),
-                }
-                ticket_record.pop("logs_request_msg_id", None)
-                ticket_record.pop("logs_request_expires", None)
-                confirm = discord.Embed(
-                    title="Logs received",
-                    description="Your logs have been received. Thank you!",
-                    color=0x2ECC71,
-                    timestamp=discord.utils.utcnow(),
-                )
-                await message.channel.send(embed=confirm)
+        await try_capture_logs(message, ticket_record)
+        save_ticket_data()
+
+
+async def try_capture_logs(message, ticket_record):
+    request_id = ticket_record.get("logs_request_msg_id")
+    if (
+        not request_id
+        or not message.reference
+        or str(message.reference.message_id) != request_id
+    ):
+        return False
+    try:
+        expires = datetime.fromisoformat(ticket_record["logs_request_expires"])
+    except (ValueError, TypeError):
+        expires = None
+    if not (expires and datetime.now(timezone.utc) <= expires):
+        return False
+    attachments = [attachment.url for attachment in message.attachments]
+    combined = message.content
+    if attachments:
+        for url in attachments:
+            text = await download_log_attachment(url)
+            if text:
+                combined = combined + "\n" + text if combined else text
+    if not attachments and not looks_like_logs(combined):
+        print(
+            "[getlogs] REJECTED reply: "
+            f"channel={message.channel.id} author={message.author.id} "
+            f"attachments={len(message.attachments)} "
+            f"content_len={len(message.content)} "
+            f"looks_like_logs={looks_like_logs(combined)}"
+        )
+        embed = discord.Embed(
+            title="Logs not recognized",
+            description=(
+                "That does not look like logs. Please reply to the logs "
+                "request with your logs as a file or as text with "
+                "timestamps (e.g. `[12:34:56] [Server thread/INFO]: ...`).\n"
+                "You can try again — the request is still valid."
+            ),
+            color=0xE74C3C,
+            timestamp=discord.utils.utcnow(),
+        )
+        await message.channel.send(embed=embed)
+        return True
+    ticket_record["logs"] = {
+        "content": message.content,
+        "attachments": attachments,
+        "text": combined,
+        "received_at": now_iso(),
+    }
+    ticket_record.pop("logs_request_msg_id", None)
+    ticket_record.pop("logs_request_expires", None)
+    confirm = discord.Embed(
+        title="Logs received",
+        description="Your logs have been received. Thank you!",
+        color=0x2ECC71,
+        timestamp=discord.utils.utcnow(),
+    )
+    await message.channel.send(embed=confirm)
+    return True
+
+
+@bot.event
+async def on_message_edit(before, after):
+    if after.author.bot:
+        return
+    ticket_record = get_ticket(after.channel.id)
+    if not ticket_record:
+        return
+    if not (ticket_record.get("logs_request_msg_id") and after.reference):
+        return
+    if str(after.author.id) != ticket_record["creator"]:
+        return
+    captured = await try_capture_logs(after, ticket_record)
+    if captured:
         save_ticket_data()
 
 
