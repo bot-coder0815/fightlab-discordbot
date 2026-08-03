@@ -2331,7 +2331,7 @@ async def status(
         "dnd": discord.Status.dnd,
         "invisible": discord.Status.invisible,
     }
-    activity = discord.Game(name="ꜰɪɢʜᴛʟᴀʙᴍᴄ.ɴᴇᴛ")
+    activity = discord.Game(name="/help | Minecraft Plugins")
     await bot.change_presence(status=status_map[mode], activity=activity)
     await ctx.followup.send(f"Status changed to **{mode}**.", ephemeral=True)
 
