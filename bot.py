@@ -5,6 +5,7 @@ import os
 import re
 import secrets
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 import discord
@@ -34,7 +35,7 @@ WEB_HOST = os.getenv("WEB_HOST", "0.0.0.0")
 WEB_PORT = int(os.getenv("WEB_PORT", "8080"))
 TRANSCRIPTS_DIR = os.path.join(DATA_DIR, "transcripts")
 
-BUILD_TAG = "logs-file-fix-2026-08-03"
+BUILD_TAG = "local-analyzer-2026-08-03"
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 TEAM_ROLE_ID = int(os.getenv("TEAM_ROLE_ID", "0") or 0)
@@ -1900,71 +1901,230 @@ async def download_log_attachment(url: str, max_bytes: int = 400_000) -> str:
         print(f"Could not download log attachment: {exc}")
     return ""
 
-
-HACK_CLIENT_PATTERN = re.compile(
-    r"\b(meteor|wurst|impact|future|liquid\s?bounce|sigma|flux|kami|konas|"
-    r"astolfo|novoline|tenacity|salhack|rusherhack|inertia|whiteout|dreytap|"
-    r"vape|barython|phobos|seaton|exhi)\b",
-    re.I,
-)
-MODDED_CLIENT_PATTERN = re.compile(
-    r"\bmodded client\b|is a modded client|client:\s*modded|"
-    r"modded client detected|incompatible client|has mods installed|"
-    r"mods?\s*detected|client modification|unauthorized modification",
-    re.I,
-)
-
-MCLOGS_HACK_MOD_RE = re.compile(
-    r"hack|cheat|modded|modified|mod(s|pack)?\b|x-?ray|unfair|forbidden|banned|illegal|tamper",
-    re.I,
-)
+SEVERITY_WEIGHT = {"high": 3, "medium": 2, "low": 1}
 
 
-def extract_hack_clients(text: str) -> list[str]:
-    names = []
-    for m in HACK_CLIENT_PATTERN.finditer(text or ""):
-        found = (m.group(1) or m.group(0)) if m.groups() else m.group(0)
-        if found.lower() not in names:
-            names.append(found.lower())
-    return names
+@dataclass(frozen=True)
+class Pattern:
+    regex: re.Pattern[str]
+    label: str
+    severity: str
+    category: str
 
 
-def extract_modded_clients(text: str) -> list[str]:
-    matches = [
-        m.group(0).lower() for m in MODDED_CLIENT_PATTERN.finditer(text or "")
-    ]
-    return sorted(set(matches))
+def _rx(pattern: str) -> re.Pattern[str]:
+    return re.compile(pattern, re.IGNORECASE)
 
 
-async def analyse_logs_mclogs(text: str) -> tuple[bool, list[dict]]:
-    try:
-        async with ClientSession() as session:
-            async with session.post(
-                "https://api.mclo.gs/1/analyse",
-                data={"content": (text or "")[:1_000_000]},
-                timeout=ClientTimeout(total=20),
-            ) as response:
-                if response.status != 200:
-                    print("mclo.gs analyse HTTP status:", response.status)
-                    return False, []
-                data = await response.json()
-    except Exception as exc:
-        print("mclo.gs analyse error:", exc)
-        return False, []
+PATTERNS: list[Pattern] = [
+    # ── Hack-Clients ──
+    Pattern(_rx(r"wurst\s*(client)?"), "Wurst Client", "high", "client"),
+    Pattern(_rx(r"meteor\s*(client)?"), "Meteor Client", "high", "client"),
+    Pattern(_rx(r"impact\s*(client)?"), "Impact Client", "high", "client"),
+    Pattern(_rx(r"future\s*(client)?"), "Future Client", "high", "client"),
+    Pattern(_rx(r"sigma\s*(client)?"), "Sigma Client", "high", "client"),
+    Pattern(_rx(r"liquid(?:bounce|\.)"), "LiquidBounce", "high", "client"),
+    Pattern(_rx(r"\bbaritone\b"), "Baritone", "high", "client"),
+    Pattern(_rx(r"aristois"), "Aristois", "high", "client"),
+    Pattern(_rx(r"inertia\s*client"), "Inertia", "high", "client"),
+    Pattern(_rx(r"bleachhack"), "BleachHack", "high", "client"),
+    Pattern(_rx(r"kami\s*blue"), "Kami Blue", "high", "client"),
+    Pattern(_rx(r"phobos\s*client"), "Phobos", "high", "client"),
+    Pattern(_rx(r"rusherhack"), "RusherHack", "high", "client"),
+    Pattern(_rx(r"konas\s*client"), "Konas", "high", "client"),
+    Pattern(_rx(r"salhack"), "SalHack", "high", "client"),
+    Pattern(_rx(r"seppuku\s*client"), "Seppuku", "high", "client"),
+    Pattern(_rx(r"gamesense"), "GameSense", "high", "client"),
+    Pattern(_rx(r"weepcraft"), "WeepCraft", "high", "client"),
+    Pattern(_rx(r"huzuni"), "Huzuni", "high", "client"),
+    Pattern(_rx(r"nodus"), "Nodus", "high", "client"),
+    Pattern(_rx(r"(?:3arthh4ck|earthhack)"), "3arthh4ck", "high", "client"),
+    Pattern(_rx(r"cookieclient"), "CookieClient", "high", "client"),
+    Pattern(_rx(r"kami\s*client"), "Kami", "high", "client"),
+    Pattern(_rx(r"lunar\s*client\s*.*(?:hack|cheat)"), "Lunar (flagged)", "high", "client"),
+    Pattern(_rx(r"badlion\s*.*(?:hack|cheat)"), "Badlion (flagged)", "high", "client"),
+    Pattern(_rx(r"vape\s*(?:client|v4|v5)"), "Vape Client", "high", "client"),
+    Pattern(_rx(r"drip\s*lite"), "Drip Lite", "high", "client"),
+    Pattern(_rx(r"novoline"), "Novoline", "high", "client"),
+    Pattern(_rx(r"tenacity"), "Tenacity", "high", "client"),
+    Pattern(_rx(r"astolfo"), "Astolfo", "high", "client"),
+    Pattern(_rx(r"jello\s*client"), "Jello Client", "high", "client"),
+    Pattern(_rx(r"skillclient"), "SkillClient", "high", "client"),
+    Pattern(_rx(r"exhibition"), "Exhibition", "high", "client"),
+    Pattern(_rx(r"rise\s*client"), "Rise Client", "high", "client"),
+    Pattern(_rx(r"saint\s*client"), "Saint", "high", "client"),
+    Pattern(_rx(r"flux\s*(?:b3|client)"), "Flux", "high", "client"),
+    Pattern(_rx(r"remix\s*client"), "Remix", "high", "client"),
+    Pattern(_rx(r"abyss\s*client"), "Abyss", "high", "client"),
+    Pattern(_rx(r"ethereal\s*client"), "Ethereal", "high", "client"),
+    Pattern(_rx(r"fdpclient|fdp\s*client"), "FDP Client", "high", "client"),
+    Pattern(_rx(r"raven\s*(?:b|client)"), "Raven", "high", "client"),
+    Pattern(_rx(r"thunderhack"), "ThunderHack", "high", "client"),
+    Pattern(_rx(r"miohack"), "MioHack", "high", "client"),
+    Pattern(_rx(r"osiris"), "Osiris", "high", "client"),
+    Pattern(_rx(r"dotgod"), "DotGod", "high", "client"),
+    Pattern(_rx(r"resolver\s*client"), "Resolver", "high", "client"),
+    # ── Weitere Hack-Mods (aus Crash-Reports) ──
+    Pattern(_rx(r"fly\s*speed"), "FlySpeed", "high", "client"),
+    Pattern(_rx(r"freecam\s*(?:mod)?"), "Freecam Mod", "high", "client"),
+    Pattern(_rx(r"(?:easy[._-]?)?stun[._-]?slam|mace.{0,4}hack"), "StunSlam Mace Hack", "high", "client"),
+    Pattern(_rx(r"toggle.?hold.?fly"), "ToggleHoldFlySpeed", "high", "client"),
+    Pattern(_rx(r"opsec"), "OpSec", "high", "client"),
+    Pattern(_rx(r"which.?client.{0,4}(?:detector)?"), "WhichClient", "medium", "client"),
+    Pattern(_rx(r"packet.?vision|dev\.packetvision"), "PacketVision", "high", "client"),
+    Pattern(_rx(r"meteor.?addition"), "MeteorAdditions", "high", "client"),
+    Pattern(_rx(r"\bswd\b|simple.{0,4}world.{0,4}download"), "SimpleWorldDownloader", "medium", "client"),
+    Pattern(_rx(r"tweakeroo"), "Tweakeroo", "low", "client"),
+    Pattern(_rx(r"world.?download"), "WorldDownloader", "medium", "client"),
+    # ── Grenzwertige Utility-Mods ──
+    Pattern(_rx(r"auto.?breach.?swap"), "Auto Breach Swap", "medium", "client"),
+    Pattern(_rx(r"crosshair.?addon"), "Crosshair Addons", "low", "client"),
+    Pattern(_rx(r"health.?indicators?"), "Health Indicators", "low", "client"),
+    Pattern(_rx(r"simple.?health.?bar"), "Simple Health Bar", "low", "client"),
+    Pattern(_rx(r"better.?f[23]"), "BetterF3", "low", "client"),
+    Pattern(_rx(r"mini.?hud"), "MiniHUD", "low", "client"),
+    Pattern(_rx(r"replay.?mod"), "ReplayMod", "low", "client"),
+    Pattern(_rx(r"viafabric.?plus|via.?fabric.?plus"), "ViaFabricPlus", "low", "client"),
+    Pattern(_rx(r"schematica"), "Schematica", "low", "client"),
+    Pattern(_rx(r"litematica"), "Litematica", "low", "client"),
+    Pattern(_rx(r"world.?edit.?cui"), "WorldEditCUI", "low", "client"),
+    Pattern(_rx(r"xearo(?:s|')?.?minimap"), "Xaeros Minimap", "low", "client"),
+    Pattern(_rx(r"journey.?map"), "JourneyMap", "low", "client"),
+    Pattern(_rx(r"waila|hwyla|jade|the.?one.?probe"), "Block Info Mod", "low", "client"),
+    Pattern(_rx(r"light.?level.?overlay"), "Light Level", "low", "client"),
+    Pattern(_rx(r"carpet\s*(mod)?"), "Carpet Mod", "low", "client"),
+    Pattern(_rx(r"toggle.?sprint"), "Toggle Sprint", "low", "client"),
+    Pattern(_rx(r"zoom\s*(mod)?"), "Zoom Mod", "low", "client"),
+    Pattern(_rx(r"mouse.?tweak"), "Mouse Tweaks", "low", "client"),
+    Pattern(_rx(r"dynmap|pl3xmap|bluemap"), "Web Map", "low", "client"),
+    # ── Anti-Cheat ──
+    Pattern(_rx(r"\bncp\b|nocheatplus"), "NoCheatPlus", "medium", "anticheat"),
+    Pattern(_rx(r"advanced\s*anticheat|\baac\b"), "AAC", "medium", "anticheat"),
+    Pattern(_rx(r"grim\s*(ac|anticheat)"), "Grim AC", "medium", "anticheat"),
+    Pattern(_rx(r"vulcan\s*(ac|anticheat)"), "Vulcan", "medium", "anticheat"),
+    Pattern(_rx(r"matrix\s*(ac|anticheat)"), "Matrix", "medium", "anticheat"),
+    Pattern(_rx(r"spartan\s*(ac|anticheat)"), "Spartan", "medium", "anticheat"),
+    Pattern(_rx(r"negativity"), "Negativity", "medium", "anticheat"),
+    Pattern(_rx(r"anticheat\s*(flag|detection)"), "AC Detection", "high", "anticheat"),
+    Pattern(_rx(r"flagged\s*(for|as|by)"), "Flagged", "high", "anticheat"),
+    Pattern(_rx(r"themis"), "Themis", "medium", "anticheat"),
+    Pattern(_rx(r"godzilla\s*(ac|anticheat)"), "Godzilla AC", "medium", "anticheat"),
+    Pattern(_rx(r"wraith\s*(ac|anticheat)"), "Wraith", "medium", "anticheat"),
+    Pattern(_rx(r"lightweight\s*anticheat"), "LW AntiCheat", "medium", "anticheat"),
+    # ── Kicks / Bans ──
+    Pattern(_rx(r"flying\s*is\s*not\s*enabled"), "Fly-Kick", "high", "kick"),
+    Pattern(_rx(r"moved\s*(too\s*)?(quickly|wrongly)"), "Move-Check", "high", "kick"),
+    Pattern(_rx(r"illegal\s*stance"), "Illegal Stance", "high", "kick"),
+    Pattern(_rx(r"illegal\s*position"), "Illegal Position", "high", "kick"),
+    Pattern(_rx(r"you\s*are\s*(?:being\s*)?kicked"), "Kicked", "medium", "kick"),
+    Pattern(_rx(r"you\s*are\s*banned"), "Banned", "high", "kick"),
+    Pattern(_rx(r"kicked\s*(?:for|while)"), "Kick Reason", "high", "kick"),
+    Pattern(_rx(r"was\s*banned\s*by"), "Ban (by player)", "high", "kick"),
+    Pattern(_rx(r"was\s*kicked\s*(?:from|by)"), "Kick (by player)", "medium", "kick"),
+    Pattern(_rx(r"temp(?:orarily)?\s*banned"), "Temp-Ban", "high", "kick"),
+    Pattern(_rx(r"permanently\s*banned"), "Perma-Ban", "high", "kick"),
+    Pattern(_rx(r"disconnected:\s*(?:fly|hack|cheat)"), "DC (Hack)", "high", "kick"),
+    Pattern(_rx(r"removed\s*from\s*the\s*game"), "Removed (AC)", "high", "kick"),
+    # ── Hack-Features ──
+    Pattern(_rx(r"\bkill-?aura\b"), "KillAura", "high", "feature"),
+    Pattern(_rx(r"\b(?:auto-?)?click(?:er)?\b"), "AutoClicker", "high", "feature"),
+    Pattern(_rx(r"\bnofall\b"), "NoFall", "high", "feature"),
+    Pattern(_rx(r"\b(?:x-?ray|wallhack)\b"), "X-Ray", "high", "feature"),
+    Pattern(_rx(r"\besp\b"), "ESP", "high", "feature"),
+    Pattern(_rx(r"\b(?:aimbot|trigger\s*bot)\b"), "Aim-Assist", "high", "feature"),
+    Pattern(_rx(r"\bnoclip\b"), "Noclip", "high", "feature"),
+    Pattern(_rx(r"\bscaffold(?:ing)?\b"), "Scaffold", "high", "feature"),
+    Pattern(_rx(r"\b(?:bhop|bhhop)\b"), "BHop", "high", "feature"),
+    Pattern(_rx(r"\bspider\b"), "Spider", "high", "feature"),
+    Pattern(_rx(r"\bspeed\s*hack\b"), "Speed Hack", "high", "feature"),
+    Pattern(_rx(r"\b(?:jetpack|flight)\b"), "Flight", "high", "feature"),
+    Pattern(_rx(r"\b(?:antiknockback|velocity\s*hack)\b"), "Velocity", "high", "feature"),
+    Pattern(_rx(r"\breach\b.*(?:hack|cheat|flag|detect)"), "Reach", "high", "feature"),
+    Pattern(_rx(r"\bcriticals?\b"), "Criticals", "medium", "feature"),
+    Pattern(_rx(r"\b(?:crystal|auto-?totem)\b"), "Crystal/Totem", "medium", "feature"),
+    Pattern(_rx(r"\b(?:blink|phase)\b"), "Blink/Phase", "high", "feature"),
+    Pattern(_rx(r"\binventory\s*move\b"), "Inv Move", "medium", "feature"),
+    Pattern(_rx(r"\btimer\s*(?:hack)?\b"), "Timer", "medium", "feature"),
+    Pattern(_rx(r"\bderp\b"), "Derp", "low", "feature"),
+    Pattern(_rx(r"\bfast(?:eat|place|break)\b"), "Fast XXX", "medium", "feature"),
+    Pattern(_rx(r"\b(?:freecam|camera\s*noclip)\b"), "Freecam", "high", "feature"),
+    Pattern(_rx(r"\bstrafe\b"), "Strafe", "medium", "feature"),
+    Pattern(_rx(r"\bsafe\s*walk\b"), "SafeWalk", "medium", "feature"),
+    Pattern(_rx(r"\bantibot\b"), "AntiBot", "medium", "feature"),
+    Pattern(_rx(r"\bchest\s*steal(?:er)?\b"), "ChestSteal", "low", "feature"),
+    Pattern(_rx(r"\bname\s*tags?\b.*(?:hack|cheat)"), "NameTags", "low", "feature"),
+    Pattern(_rx(r"\btracers?\b"), "Tracers", "low", "feature"),
+    Pattern(_rx(r"\b(?:breach|baritone)\s*bot\b"), "Mining Bot", "high", "feature"),
+    Pattern(_rx(r"\bsneak\b"), "Sneak", "low", "feature"),
+    Pattern(_rx(r"\banti-?blind(?:ness)?\b"), "AntiBlind", "low", "feature"),
+    # ── Exploits ──
+    Pattern(_rx(r"op\s*sign\s*exploit"), "OP-Sign Exploit", "high", "exploit"),
+    Pattern(_rx(r"\bdupe|duplication\b"), "Dupe", "high", "exploit"),
+    Pattern(_rx(r"\bexploit\b"), "Exploit", "high", "exploit"),
+    Pattern(_rx(r"infinite\s*diamond"), "Infinite Diamond", "high", "exploit"),
+    Pattern(_rx(r"seed\s*cracker"), "Seed Cracker", "high", "exploit"),
+    Pattern(_rx(r"book\s*exploit"), "Book Exploit", "high", "exploit"),
+    Pattern(_rx(r"chunk\s*dupe"), "Chunk Dupe", "high", "exploit"),
+    Pattern(_rx(r"portal\s*dupe"), "Portal Dupe", "high", "exploit"),
+    Pattern(_rx(r"illegal\s*stack"), "Illegal Stack", "high", "exploit"),
+    Pattern(_rx(r"give\s*exploit"), "Give Exploit", "high", "exploit"),
+    Pattern(_rx(r"nbt\s*exploit"), "NBT Exploit", "high", "exploit"),
+    Pattern(_rx(r"negative\s*(dupe|duplication)"), "Negative Dupe", "high", "exploit"),
+    Pattern(_rx(r"lag\s*machine"), "Lag Machine", "high", "exploit"),
+    Pattern(_rx(r"crash\s*exploit"), "Crash Exploit", "high", "exploit"),
+    Pattern(_rx(r"book\s*banner\s*exploit"), "Book Banner", "high", "exploit"),
+    # ── Generische Schlagwörter ──
+    Pattern(_rx(r"\bhack(?:ed|ing|s)?\b"), "Hack mention", "medium", "generic"),
+    Pattern(_rx(r"\bcheat(?:s|ing|er)?\b"), "Cheat mention", "medium", "generic"),
+    Pattern(_rx(r"\b(?:cracked|alt)\s*(?:account)?\b"), "Cracked/Alt", "medium", "generic"),
+    Pattern(_rx(r"\bop\s*account\b"), "OP-Account", "medium", "generic"),
+    # ── Verbindung ──
+    Pattern(_rx(r"connection\s*throttled"), "Throttled", "low", "connection"),
+    Pattern(_rx(r"vpn|proxy\s*(?:detected|block)"), "VPN/Proxy", "medium", "connection"),
+    Pattern(_rx(r"login\s*from\s*(?:another|different)\s*location"), "Alt-Login", "medium", "connection"),
+    Pattern(_rx(r"too\s*many\s*connections"), "Rate-Limit", "low", "connection"),
+    Pattern(_rx(r"connection\s*reset"), "Connection Reset", "low", "connection"),
+    Pattern(_rx(r"read\s*timeout"), "Read Timeout", "low", "connection"),
+    Pattern(_rx(r"connect\s*exception"), "Connect Exception", "low", "connection"),
+    # ── Spielernamen ──
+    Pattern(_rx(r"\bname=([A-Za-z]\w{2,15})\b"), "Spielername", "low", "player"),
+    Pattern(_rx(r"<([A-Za-z]\w{2,15})>"), "Spieler (Chat)", "low", "player"),
+]
+
+
+def find_pattern(label: str) -> Pattern | None:
+    for p in PATTERNS:
+        if p.label == label:
+            return p
+    return None
+
+
+def max_severity(matches: list[dict]) -> str:
+    worst = "low"
+    for m in matches:
+        if SEVERITY_WEIGHT[m["severity"]] > SEVERITY_WEIGHT[worst]:
+            worst = m["severity"]
+    return worst
+
+
+def scan_logs(text: str) -> list[dict]:
     findings = []
-    analysis = data.get("analysis") or {}
-    for group in ("problems", "information"):
-        for entry in analysis.get(group, []):
-            message = entry.get("message") or ""
-            if MCLOGS_HACK_MOD_RE.search(message):
-                findings.append(
+    for i, line in enumerate((text or "").splitlines(), start=1):
+        matches = []
+        for p in PATTERNS:
+            m = p.regex.search(line)
+            if m:
+                matches.append(
                     {
-                        "group": group,
-                        "message": message,
-                        "count": entry.get("counter", 1),
+                        "label": p.label,
+                        "severity": p.severity,
+                        "category": p.category,
+                        "match": m.group(0),
                     }
                 )
-    return True, findings
+        if matches:
+            findings.append({"line": i, "text": line, "matches": matches})
+    return findings
 
 
 @ticket.command(
@@ -2041,42 +2201,48 @@ async def ticket_analyze_logs(ctx: discord.ApplicationContext):
             ephemeral=True,
         )
         return
-    mclogs_ok, mclogs_findings = await analyse_logs_mclogs(text)
-    hack_clients = extract_hack_clients(text)
-    modded_clients = extract_modded_clients(text)
+    findings = scan_logs(text)
+    client_labels = {}
+    evidence = []
+    for finding in findings:
+        for m in finding.get("matches", []):
+            if m.get("category") == "client":
+                label = m.get("label") or m.get("match") or "Unknown"
+                client_labels[label] = client_labels.get(label, 0) + 1
+        if any(
+            m.get("category") in ("client", "feature", "exploit")
+            for m in finding.get("matches", [])
+        ):
+            evidence.append(
+                f"Line {finding.get('line')}: {finding.get('text', '')}"
+            )
+
     embed = discord.Embed(
         title="Log Analysis",
         color=0x3498DB,
         timestamp=discord.utils.utcnow(),
     )
-    if not (hack_clients or modded_clients or mclogs_findings):
+    if not client_labels:
         embed.description = (
             "No hack clients or mods found that could explain a ban.\n"
-            "(Analysis via mclo.gs)"
+            "(Analysis via mcp-log-analyzer patterns)"
         )
     else:
         embed.description = "Possible ban-relevant findings:"
-        if hack_clients:
+        embed.add_field(
+            name=f"Hack Clients & Mods ({len(client_labels)})",
+            value=", ".join(
+                f"{label} (x{count})"
+                for label, count in sorted(client_labels.items())
+            ),
+            inline=False,
+        )
+        if evidence:
             embed.add_field(
-                name=f"Hack Clients ({len(hack_clients)})",
-                value=", ".join(sorted(set(hack_clients))),
+                name="Evidence",
+                value="\n".join(evidence[:5])[:1020],
                 inline=False,
             )
-        if modded_clients:
-            embed.add_field(
-                name="Modded / Unauthorized Client",
-                value=", ".join(modded_clients),
-                inline=False,
-            )
-        for finding in mclogs_findings[:10]:
-            suffix = f" (x{finding['count']})" if finding["count"] > 1 else ""
-            embed.add_field(
-                name=f"mclo.gs {finding['group'].capitalize()}{suffix}",
-                value=finding["message"],
-                inline=False,
-            )
-        if not mclogs_ok:
-            embed.description += "\n(Note: mclo.gs unreachable — used local detection)"
     embed.set_footer(text="FightLabMC.net")
     await ctx.followup.send(embed=embed, ephemeral=True)
 
