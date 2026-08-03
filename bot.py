@@ -484,6 +484,40 @@ class NewsModal(discord.ui.Modal):
         await interaction.followup.send(
             f"News in {self.channel.mention} veröffentlicht.", ephemeral=True
         )
+
+
+class SayModal(discord.ui.Modal):
+    message = discord.ui.InputText(
+        label="Nachricht",
+        style=discord.InputTextStyle.paragraph,
+        placeholder="Text, den der Bot senden soll…",
+        required=True,
+        max_length=4000,
+    )
+
+    def __init__(self, channel: discord.TextChannel):
+        super().__init__(self.message, title="Say")
+        self.channel = channel
+
+    async def callback(self, interaction: discord.Interaction):
+        content = self.message.value
+        await interaction.response.defer(ephemeral=True)
+        try:
+            await self.channel.send(content)
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "Ich habe keine Berechtigung, in diesen Kanal zu schreiben.",
+                ephemeral=True,
+            )
+            return
+        except discord.HTTPException as exc:
+            await interaction.followup.send(
+                f"Fehler beim Senden: {exc}", ephemeral=True
+            )
+            return
+        await interaction.followup.send(
+            f"Nachricht in {self.channel.mention} gesendet.", ephemeral=True
+        )
         print("on_submit: fertig")
 
 
@@ -510,6 +544,19 @@ async def tellnews(
         return
     print("tellnews: Modal wird geöffnet")
     await ctx.send_modal(NewsModal(target))
+
+
+@bot.slash_command(
+    name="say",
+    description="Lass den Bot einen Text in diesem Kanal senden (Admin)",
+)
+async def say(ctx: discord.ApplicationContext):
+    if not ctx.author.guild_permissions.administrator:
+        await ctx.respond(
+            "Du brauchst Administrator-Berechtigungen.", ephemeral=True
+        )
+        return
+    await ctx.send_modal(SayModal(ctx.channel))
 
 
 @bot.slash_command(
