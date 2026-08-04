@@ -126,6 +126,42 @@ autorole_config: dict = {
     "add_to_bots": False,
 }
 
+DASHBOARD_ROLES_FILE = os.path.join(DATA_DIR, "dashboard_roles.json")
+dashboard_roles_config: dict = {
+    "allowed_roles": [],
+    "allow_admin": True,
+}
+
+
+def load_dashboard_roles_config() -> None:
+    global dashboard_roles_config
+    candidates = [
+        DASHBOARD_ROLES_FILE,
+        os.path.join(BASE_DIR, "dashboard_roles.json"),
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    dashboard_roles_config = data
+                    break
+            except (json.JSONDecodeError, OSError):
+                pass
+    dashboard_roles_config.setdefault("allowed_roles", [])
+    dashboard_roles_config.setdefault("allow_admin", True)
+
+
+def can_access_dashboard(member: discord.Member) -> bool:
+    if member is None:
+        return False
+    if member.guild_permissions.administrator and dashboard_roles_config.get("allow_admin", True):
+        return True
+    role_ids = {str(r.id) for r in member.roles}
+    allowed = {str(rid) for rid in dashboard_roles_config.get("allowed_roles", [])}
+    return bool(role_ids & allowed)
+
 
 def load_autorole_config() -> None:
     global autorole_config
@@ -1284,6 +1320,10 @@ def dashboard_config_files() -> dict[str, str]:
             AUTOROLE_CONFIG_FILE,
             os.path.join(BASE_DIR, "autorole.json"),
         ],
+        "dashboard_roles.json": [
+            DASHBOARD_ROLES_FILE,
+            os.path.join(BASE_DIR, "dashboard_roles.json"),
+        ],
     }
     files = {}
     for name, paths in specs.items():
@@ -1497,6 +1537,8 @@ async def handle_dashboard_save(request):
         load_invites_data()
     if name == "autorole.json":
         load_autorole_config()
+    if name == "dashboard_roles.json":
+        load_dashboard_roles_config()
     print(f"Dashboard: saved config {name} to {path}")
     return web.HTTPFound("/dashboard/edit")
 
@@ -2428,10 +2470,10 @@ async def ticketpanel(
 
 @bot.slash_command(
     name="get-access-code",
-    description="Generates a dashboard access code (Team)",
+    description="Generates a dashboard access code (Dashboard role)",
 )
 async def get_access_code(ctx: discord.ApplicationContext):
-    if TEAM_ROLE_ID and not any(role.id == TEAM_ROLE_ID for role in ctx.author.roles):
+    if not can_access_dashboard(ctx.author):
         await ctx.respond(
             "You are not allowed to generate access codes.", ephemeral=True
         )
@@ -2922,6 +2964,7 @@ async def on_ready():
     load_ticket_data()
     load_language_config()
     load_autorole_config()
+    load_dashboard_roles_config()
     print("Role-language map:", build_role_language_map())
     saved_status = load_saved_status()
     await bot.change_presence(
