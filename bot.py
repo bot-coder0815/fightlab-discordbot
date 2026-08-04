@@ -163,6 +163,45 @@ def can_access_dashboard(member: discord.Member) -> bool:
     return bool(role_ids & allowed)
 
 
+ALLOWROLE_FILE = os.path.join(DATA_DIR, "allowrole.json")
+allowrole_config: dict = {
+    "mod_roles": [],
+    "timeout_roles": [],
+    "allow_admin": True,
+}
+
+
+def load_allowrole_config() -> None:
+    global allowrole_config
+    candidates = [
+        ALLOWROLE_FILE,
+        os.path.join(BASE_DIR, "allowrole.json"),
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    allowrole_config = data
+                    break
+            except (json.JSONDecodeError, OSError):
+                pass
+    allowrole_config.setdefault("mod_roles", [])
+    allowrole_config.setdefault("timeout_roles", [])
+    allowrole_config.setdefault("allow_admin", True)
+
+
+def has_role_from(member: discord.Member, key: str) -> bool:
+    if member is None:
+        return False
+    if member.guild_permissions.administrator and allowrole_config.get("allow_admin", True):
+        return True
+    role_ids = {str(r.id) for r in member.roles}
+    allowed = {str(rid) for rid in allowrole_config.get(key, [])}
+    return bool(role_ids & allowed)
+
+
 def load_autorole_config() -> None:
     global autorole_config
     candidates = [
@@ -677,6 +716,99 @@ async def invites(
         .set_footer(text="FightLabMC.net")
     )
     await ctx.respond(embed=embed)
+
+
+def parse_duration(text: str) -> timedelta | None:
+    text = (text or "").strip().lower()
+    if not text:
+        return None
+    match = re.match(
+        r"^(\d+)\s*(seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|w)$",
+        text,
+    )
+    if not match:
+        return None
+    amount = int(match.group(1))
+    unit = match.group(2)
+    if unit.startswith("s"):
+        return timedelta(seconds=amount)
+    if unit.startswith("m"):
+        return timedelta(minutes=amount)
+    if unit.startswith("h"):
+        return timedelta(hours=amount)
+    if unit.startswith("d"):
+        return timedelta(days=amount)
+    if unit.startswith("w"):
+        return timedelta(weeks=amount)
+    return None
+
+
+@bot.slash_command(
+    name="timeout",
+    description="Timeout a member for a duration (e.g. 10m, 1h, 1d) (Moderation)",
+)
+async def timeout(
+    ctx: discord.ApplicationContext,
+    member: discord.Option(
+        discord.Member,
+        description="Member to timeout",
+    ),
+    duration: discord.Option(
+        str,
+        description="Duration, e.g. 10m, 1h, 1d, 2w",
+    ),
+):
+    await ctx.defer(ephemeral=True)
+    if not has_role_from(ctx.author, "timeout_roles"):
+        await ctx.followup.send(
+            "You don't have permission to use /timeout.", ephemeral=True
+        )
+        return
+    td = parse_duration(duration)
+    if td is None:
+        await ctx.followup.send(
+            "Invalid duration. Examples: `10m`, `1h`, `1d`, `2w`.", ephemeral=True
+        )
+        return
+    if td.total_seconds() <= 0:
+        await ctx.followup.send(
+            "Duration must be greater than 0.", ephemeral=True
+        )
+        return
+    if member == ctx.author:
+        await ctx.followup.send(
+            "You can't timeout yourself.", ephemeral=True
+        )
+        return
+    if member.id == bot.user.id:
+        await ctx.followup.send(
+            "You can't timeout the bot.", ephemeral=True
+        )
+        return
+    try:
+        await member.timeout(td, reason=f"Timeout by {ctx.author} ({duration})")
+    except discord.Forbidden:
+        await ctx.followup.send(
+            "I don't have permission to timeout that member.", ephemeral=True
+        )
+        return
+    except discord.HTTPException as exc:
+        await ctx.followup.send(
+            f"Failed to timeout member: {exc}", ephemeral=True
+        )
+        return
+    embed = (
+        discord.Embed(
+            title="Member Timed Out",
+            description=(
+                f"**{member.mention}** was timed out for **{duration}**."
+            ),
+            color=0xE74C3C,
+            timestamp=discord.utils.utcnow(),
+        )
+        .set_footer(text="FightLabMC.net")
+    )
+    await ctx.followup.send(embed=embed, ephemeral=True)
 
 
 def load_ticket_data():
@@ -1324,6 +1456,10 @@ def dashboard_config_files() -> dict[str, str]:
             DASHBOARD_ROLES_FILE,
             os.path.join(BASE_DIR, "dashboard_roles.json"),
         ],
+        "allowrole.json": [
+            ALLOWROLE_FILE,
+            os.path.join(BASE_DIR, "allowrole.json"),
+        ],
     }
     files = {}
     for name, paths in specs.items():
@@ -1539,6 +1675,8 @@ async def handle_dashboard_save(request):
         load_autorole_config()
     if name == "dashboard_roles.json":
         load_dashboard_roles_config()
+    if name == "allowrole.json":
+        load_allowrole_config()
     print(f"Dashboard: saved config {name} to {path}")
     return web.HTTPFound("/dashboard/edit")
 
@@ -2965,6 +3103,7 @@ async def on_ready():
     load_language_config()
     load_autorole_config()
     load_dashboard_roles_config()
+    load_allowrole_config()
     print("Role-language map:", build_role_language_map())
     saved_status = load_saved_status()
     await bot.change_presence(
