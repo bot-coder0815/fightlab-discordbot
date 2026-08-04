@@ -119,6 +119,34 @@ language_config: dict = {
     "strings": {},
 }
 
+AUTOROLE_CONFIG_FILE = os.path.join(DATA_DIR, "autorole.json")
+autorole_config: dict = {
+    "enabled": False,
+    "roles": [],
+    "add_to_bots": False,
+}
+
+
+def load_autorole_config() -> None:
+    global autorole_config
+    candidates = [
+        AUTOROLE_CONFIG_FILE,
+        os.path.join(BASE_DIR, "autorole.json"),
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    autorole_config = data
+                    break
+            except (json.JSONDecodeError, OSError):
+                pass
+    autorole_config.setdefault("enabled", False)
+    autorole_config.setdefault("roles", [])
+    autorole_config.setdefault("add_to_bots", False)
+
 
 def build_role_language_map() -> dict[str, str]:
     role_map = {}
@@ -251,6 +279,32 @@ async def on_invite_delete(invite):
     save_invites_data()
 
 
+async def apply_autorole(member: discord.Member) -> None:
+    cfg = autorole_config
+    if not cfg.get("enabled"):
+        return
+    if member.bot and not cfg.get("add_to_bots", False):
+        return
+    role_ids = cfg.get("roles", []) or []
+    guild = member.guild
+    for raw_id in role_ids:
+        try:
+            role_id = int(raw_id)
+        except (ValueError, TypeError):
+            continue
+        role = guild.get_role(role_id)
+        if role is None:
+            print(f"apply_autorole: role {role_id} not found in guild {guild.id}")
+            continue
+        try:
+            await member.add_roles(role, reason="autorole")
+        except discord.Forbidden:
+            print(f"apply_autorole: missing permissions to assign role {role_id}")
+            return
+        except discord.HTTPException as exc:
+            print(f"apply_autorole: failed to assign role {role_id}: {exc}")
+
+
 @bot.event
 async def on_member_join(member):
     guild = member.guild
@@ -297,6 +351,8 @@ async def on_member_join(member):
             stats["regular"] += 1
 
     save_invites_data()
+
+    await apply_autorole(member)
 
     if JOIN_LOG_CHANNEL_ID:
         channel = guild.get_channel(int(JOIN_LOG_CHANNEL_ID))
@@ -1224,6 +1280,10 @@ def dashboard_config_files() -> dict[str, str]:
             DATA_FILE,
             os.path.join(BASE_DIR, "invites_data.json"),
         ],
+        "autorole.json": [
+            AUTOROLE_CONFIG_FILE,
+            os.path.join(BASE_DIR, "autorole.json"),
+        ],
     }
     files = {}
     for name, paths in specs.items():
@@ -1433,6 +1493,10 @@ async def handle_dashboard_save(request):
         f.write("\n")
     if name == "languages.json":
         load_language_config()
+    if name == "invites_data.json":
+        load_invites_data()
+    if name == "autorole.json":
+        load_autorole_config()
     print(f"Dashboard: saved config {name} to {path}")
     return web.HTTPFound("/dashboard/edit")
 
@@ -2857,6 +2921,7 @@ async def on_ready():
     save_invites_data()
     load_ticket_data()
     load_language_config()
+    load_autorole_config()
     print("Role-language map:", build_role_language_map())
     saved_status = load_saved_status()
     await bot.change_presence(
