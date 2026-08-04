@@ -746,11 +746,11 @@ def parse_duration(text: str) -> timedelta | None:
     return td
 
 
-@bot.slash_command(
-    name="timeout",
-    description="Timeout a member for a duration (e.g. 10m, 1h, 1d) (Moderation)",
-)
-async def timeout(
+timeout = bot.create_group("timeout", "Timeout management (Moderation)")
+
+
+@timeout.command(name="add", description="Timeout a member for a duration")
+async def timeout_add(
     ctx: discord.ApplicationContext,
     member: discord.Option(
         discord.Member,
@@ -758,7 +758,7 @@ async def timeout(
     ),
     duration: discord.Option(
         str,
-        description="Duration, e.g. 10m, 1h, 1d, 2w",
+        description="Duration, e.g. 10m, 1h, 1d, 2w, 2w 3d 10m 4s",
     ),
 ):
     await ctx.defer(ephemeral=True)
@@ -770,12 +770,7 @@ async def timeout(
     td = parse_duration(duration)
     if td is None:
         await ctx.followup.send(
-            "Invalid duration. Examples: `10m`, `1h`, `1d`, `2w`.", ephemeral=True
-        )
-        return
-    if td.total_seconds() <= 0:
-        await ctx.followup.send(
-            "Duration must be greater than 0.", ephemeral=True
+            "Invalid duration. Examples: `10m`, `1h`, `1d`, `2w`, `2w 3d 10m 4s`.", ephemeral=True
         )
         return
     if member == ctx.author:
@@ -810,6 +805,90 @@ async def timeout(
                 f"**{member.mention}** was timed out for **{duration}**."
             ),
             color=0xE74C3C,
+            timestamp=discord.utils.utcnow(),
+        )
+        .set_footer(text="FightLabMC.net")
+    )
+    await ctx.followup.send(embed=embed, ephemeral=True)
+
+
+@timeout.command(name="check", description="Check a member's timeout status")
+async def timeout_check(
+    ctx: discord.ApplicationContext,
+    member: discord.Option(
+        discord.Member,
+        description="Member to check",
+    ),
+):
+    await ctx.defer(ephemeral=True)
+    if not has_role_from(ctx.author, "timeout_roles"):
+        await ctx.followup.send(
+            "You don't have permission to use /timeout check.", ephemeral=True
+        )
+        return
+    timed_out_until = member.communication_disabled_until
+    if timed_out_until is None:
+        await ctx.followup.send(
+            f"**{member.mention}** is not currently timed out.", ephemeral=True
+        )
+    else:
+        now = discord.utils.utcnow()
+        if timed_out_until.tzinfo is None:
+            timed_out_until = timed_out_until.replace(tzinfo=timezone.utc)
+        remaining = timed_out_until - now
+        if remaining.total_seconds() <= 0:
+            await ctx.followup.send(
+                f"**{member.mention}**'s timeout has just expired (not yet updated).", ephemeral=True
+            )
+        else:
+            delta = str(remaining).split(".")[0]
+            await ctx.followup.send(
+                f"**{member.mention}** is timed out.\n"
+                f"Expires: <t:{int(timed_out_until.timestamp())}:F>\n"
+                f"Time left: {delta}",
+                ephemeral=True,
+            )
+
+
+@timeout.command(name="remove", description="Remove a member's timeout")
+async def timeout_remove(
+    ctx: discord.ApplicationContext,
+    member: discord.Option(
+        discord.Member,
+        description="Member to un-timeout",
+    ),
+):
+    await ctx.defer(ephemeral=True)
+    if not has_role_from(ctx.author, "timeout_roles"):
+        await ctx.followup.send(
+            "You don't have permission to use /timeout remove.", ephemeral=True
+        )
+        return
+    if member.communication_disabled_until is None:
+        await ctx.followup.send(
+            f"**{member.mention}** is not currently timed out.", ephemeral=True
+        )
+        return
+    try:
+        await member.timeout(
+            None,
+            reason=f"Timeout removed by {ctx.author}",
+        )
+    except discord.Forbidden:
+        await ctx.followup.send(
+            "I don't have permission to modify that member.", ephemeral=True
+        )
+        return
+    except discord.HTTPException as exc:
+        await ctx.followup.send(
+            f"Failed to remove timeout: {exc}", ephemeral=True
+        )
+        return
+    embed = (
+        discord.Embed(
+            title="Timeout Removed",
+            description=f"**{member.mention}**'s timeout has been removed.",
+            color=0x2ECC71,
             timestamp=discord.utils.utcnow(),
         )
         .set_footer(text="FightLabMC.net")
