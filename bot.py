@@ -722,25 +722,28 @@ def parse_duration(text: str) -> timedelta | None:
     text = (text or "").strip().lower()
     if not text:
         return None
-    match = re.match(
-        r"^(\d+)\s*(seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|w)$",
+    components = re.findall(
+        r"(\d+)\s*(seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h|days?|d|weeks?|w)",
         text,
     )
-    if not match:
+    if not components:
         return None
-    amount = int(match.group(1))
-    unit = match.group(2)
-    if unit.startswith("s"):
-        return timedelta(seconds=amount)
-    if unit.startswith("m"):
-        return timedelta(minutes=amount)
-    if unit.startswith("h"):
-        return timedelta(hours=amount)
-    if unit.startswith("d"):
-        return timedelta(days=amount)
-    if unit.startswith("w"):
-        return timedelta(weeks=amount)
-    return None
+    td = timedelta()
+    for amount_str, unit in components:
+        amount = int(amount_str)
+        if unit.startswith("s"):
+            td += timedelta(seconds=amount)
+        elif unit.startswith("m"):
+            td += timedelta(minutes=amount)
+        elif unit.startswith("h"):
+            td += timedelta(hours=amount)
+        elif unit.startswith("d"):
+            td += timedelta(days=amount)
+        elif unit.startswith("w"):
+            td += timedelta(weeks=amount)
+    if td.total_seconds() <= 0:
+        return None
+    return td
 
 
 @bot.slash_command(
