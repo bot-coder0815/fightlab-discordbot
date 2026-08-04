@@ -1220,6 +1220,10 @@ def dashboard_config_files() -> dict[str, str]:
             TICKET_TOPICS_FILE,
             os.path.join(BASE_DIR, "ticket_topics.json"),
         ],
+        "invites_data.json": [
+            DATA_FILE,
+            os.path.join(BASE_DIR, "invites_data.json"),
+        ],
     }
     files = {}
     for name, paths in specs.items():
