@@ -786,7 +786,10 @@ async def timeout(
         )
         return
     try:
-        await member.timeout(td, reason=f"Timeout by {ctx.author} ({duration})")
+        await member.timeout(
+            discord.utils.utcnow() + td,
+            reason=f"Timeout by {ctx.author} ({duration})",
+        )
     except discord.Forbidden:
         await ctx.followup.send(
             "I don't have permission to timeout that member.", ephemeral=True
