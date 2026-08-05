@@ -249,12 +249,15 @@ async def dm_target(
     target: discord.User | discord.Member,
     action: str,
     reason: str | None,
+    moderator: discord.Member | None = None,
     duration: str | None = None,
 ):
-    desc = f"You have been **{action}**."
+    desc = f"You have been **{action}** on **{modator_guild_name(target, moderator)}**."
     if duration:
         desc += f"\n\n**Duration:** {duration}"
     desc += f"\n\n**Reason:** {reason or 'No reason provided.'}"
+    if moderator and moderator.id != target.id:
+        desc += f"\n\n**Moderator:** {moderator.display_name} (`{moderator.id}`)"
     title = "Banned" if action == "ban" else f"{action.title()}"
     embed = (
         discord.Embed(
@@ -269,6 +272,13 @@ async def dm_target(
         await target.send(embed=embed)
     except discord.HTTPException as exc:
         print(f"mod_log DM to {target.id} failed: {exc}")
+
+
+def modator_guild_name(target, moderator: discord.Member | None):
+    if moderator is not None:
+        return moderator.guild.name
+    guild = getattr(target, "guild", None)
+    return guild.name if guild else "the server"
 
 
 def load_autorole_config() -> None:
@@ -875,7 +885,7 @@ async def timeout_add(
         )
         return
     await log_to_mod_log("timeout", ctx.author, member, reason_text)
-    await dm_target(member, "timed out", reason_text, duration=duration)
+    await dm_target(member, "timed out", reason_text, moderator=ctx.author, duration=duration)
     embed = (
         discord.Embed(
             title="Member Timed Out",
@@ -1036,7 +1046,7 @@ async def kick(
         )
         return
     await log_to_mod_log("kick", ctx.author, member, reason_text)
-    await dm_target(member, "kicked", reason_text)
+    await dm_target(member, "kicked", reason_text, moderator=ctx.author)
     embed = (
         discord.Embed(
             title="Member Kicked",
@@ -1114,7 +1124,7 @@ async def ban(
         )
         return
     await log_to_mod_log("ban", ctx.author, user, reason_text)
-    await dm_target(user, "banned", reason_text)
+    await dm_target(user, "banned", reason_text, moderator=ctx.author)
     embed = (
         discord.Embed(
             title="Member Banned",
@@ -1123,6 +1133,72 @@ async def ban(
                 + (f"\n\n**Reason:** {reason_text}" if reason_text else "")
             ),
             color=0xE74C3C,
+            timestamp=discord.utils.utcnow(),
+        )
+        .set_footer(text="FightLabMC.net")
+    )
+    await ctx.followup.send(embed=embed, ephemeral=True)
+
+
+@bot.slash_command(
+    name="unban",
+    description="Unban a user from the server (Moderation)",
+)
+async def unban(
+    ctx: discord.ApplicationContext,
+    user: discord.Option(
+        discord.User,
+        description="User to unban",
+    ),
+    reason: discord.Option(
+        str,
+        description="Reason for the unban (optional)",
+        required=False,
+    ) = None,
+):
+    await ctx.defer(ephemeral=True)
+    if not has_role_from(ctx.author, "ban_roles"):
+        await ctx.followup.send(
+            "You don't have permission to use /unban.", ephemeral=True
+        )
+        return
+    if user.id == ctx.author.id:
+        await ctx.followup.send(
+            "You can't unban yourself.", ephemeral=True
+        )
+        return
+    if user.id == bot.user.id:
+        await ctx.followup.send(
+            "You can't unban the bot.", ephemeral=True
+        )
+        return
+    reason_text = reason or ""
+    try:
+        await ctx.guild.unban(
+            user=user,
+            reason=f"Unban by {ctx.author}"
+            + (f" — {reason_text}" if reason_text else ""),
+        )
+    except discord.Forbidden:
+        await ctx.followup.send(
+            "I don't have permission to unban that user.", ephemeral=True
+        )
+        return
+    except discord.HTTPException as exc:
+        await ctx.followup.send(
+            f"Failed to unban user: {exc}", ephemeral=True
+        )
+        return
+    await log_to_mod_log("unban", ctx.author, user, reason_text)
+    await dm_target(user, "unbanned", reason_text, moderator=ctx.author)
+    embed = (
+        discord.Embed(
+            title="User Unbanned",
+            description=(
+                f"**{user.mention}** has been unbanned."
+                + (f"\n\n**Reason:** {reason_text}" if reason_text else "")
+            ),
+            color=0x2ECC71,
             timestamp=discord.utils.utcnow(),
         )
         .set_footer(text="FightLabMC.net")
