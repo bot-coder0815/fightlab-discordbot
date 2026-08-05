@@ -1,0 +1,10 @@
+{
+  "enabled": false,
+  "words": [],
+  "whitelist_channels": [],
+  "whitelist_roles": [],
+  "case_sensitive": false,
+  "delete_message": true,
+  "timeout_minutes": 0,
+  "notify_user": true
+}

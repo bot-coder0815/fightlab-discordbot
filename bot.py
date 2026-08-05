@@ -118,6 +118,75 @@ ANTISPAM_WARN_COOLDOWN = 60.0
 spam_state: dict[int, list[tuple[float, str]]] = {}
 last_spam_warn: dict[int, float] = {}
 
+BLOCKED_WORDS_FILE = os.path.join(DATA_DIR, "blocked_words.json")
+blocked_words_config: dict = {
+    "enabled": False,
+    "words": [],
+    "whitelist_channels": [],
+    "whitelist_roles": [],
+    "case_sensitive": False,
+    "delete_message": True,
+    "timeout_minutes": 0,
+    "notify_user": True,
+}
+
+
+def load_blocked_words_config() -> None:
+    global blocked_words_config
+    candidates = [
+        BLOCKED_WORDS_FILE,
+        os.path.join(BASE_DIR, "blocked_words.json"),
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    blocked_words_config = data
+                    break
+            except (json.JSONDecodeError, OSError):
+                pass
+    blocked_words_config.setdefault("enabled", False)
+    blocked_words_config.setdefault("words", [])
+    blocked_words_config.setdefault("whitelist_channels", [])
+    blocked_words_config.setdefault("whitelist_roles", [])
+    blocked_words_config.setdefault("case_sensitive", False)
+    blocked_words_config.setdefault("delete_message", True)
+    blocked_words_config.setdefault("timeout_minutes", 0)
+    blocked_words_config.setdefault("notify_user", True)
+
+
+def member_has_whitelist_role(member: discord.Member) -> bool:
+    if not hasattr(member, "roles"):
+        return False
+    if member.guild_permissions.administrator:
+        return True
+    whitelist = {
+        str(rid) for rid in blocked_words_config.get("whitelist_roles", [])
+    }
+    role_ids = {str(r.id) for r in member.roles}
+    return bool(role_ids & whitelist)
+
+
+def find_blocked_word(content: str):
+    words = blocked_words_config.get("words", []) or []
+    if not words:
+        return None
+    if blocked_words_config.get("case_sensitive", False):
+        for word in words:
+            w = word or ""
+            if w and w in content:
+                return w
+    else:
+        lowered = content.lower()
+        for word in words:
+            w = (word or "").lower()
+            if w and w in lowered:
+                return word or w
+    return None
+
+
 LANGUAGES = {
     "de": "Deutsch",
     "en": "English",
@@ -830,19 +899,19 @@ async def invites(
 
 @bot.slash_command(
     name="verify",
-    description="Verifiziere dich mit deinem Minecraft-Account",
+    description="Verify with your Minecraft account",
 )
-async def verify(ctx: discord.ApplicationContext, code: discord.Option(str, description="Dein Verifizierungscode")):
+async def verify(ctx: discord.ApplicationContext, code: discord.Option(str, description="Your verification code")):
     code = (code or "").strip().upper()
     if not code:
-        await ctx.respond("Bitte gib deinen Verifizierungscode ein.", ephemeral=True)
+        await ctx.respond("Please enter your verification code.", ephemeral=True)
         return
     entry = pending_codes.pop(code, None)
     if entry is None:
-        await ctx.respond("Ungültiger Code. Bitte prüfe deinen Code und versuche es erneut.", ephemeral=True)
+        await ctx.respond("Invalid code. Please check your code and try again.", ephemeral=True)
         return
     if entry["expires"] < time.time():
-        await ctx.respond("Der Code ist abgelaufen. Bitte fordere einen neuen Code an.", ephemeral=True)
+        await ctx.respond("The code has expired. Please request a new code.", ephemeral=True)
         return
     uuid = entry["uuid"]
     verified[uuid] = {"discord_id": str(ctx.author.id), "verified_at": datetime.now(timezone.utc).isoformat(), "name": entry["name"]}
@@ -856,7 +925,7 @@ async def verify(ctx: discord.ApplicationContext, code: discord.Option(str, desc
                     await ctx.author.add_roles(role, reason="Verify")
                 except discord.HTTPException:
                     pass
-    await ctx.respond(f"✅ Du wurdest erfolgreich verifiziert! Willkommen, {entry['name']}.", ephemeral=True)
+    await ctx.respond(f"✅ You have been verified successfully! Welcome, {entry['name']}.", ephemeral=True)
 
 
 def parse_duration(text: str) -> timedelta | None:
@@ -1974,6 +2043,10 @@ def dashboard_config_files() -> dict[str, str]:
             ALLOWROLE_FILE,
             os.path.join(BASE_DIR, "allowrole.json"),
         ],
+        "blocked_words.json": [
+            BLOCKED_WORDS_FILE,
+            os.path.join(BASE_DIR, "blocked_words.json"),
+        ],
     }
     files = {}
     for name, paths in specs.items():
@@ -2191,6 +2264,8 @@ async def handle_dashboard_save(request):
         load_dashboard_roles_config()
     if name == "allowrole.json":
         load_allowrole_config()
+    if name == "blocked_words.json":
+        load_blocked_words_config()
     print(f"Dashboard: saved config {name} to {path}")
     return web.HTTPFound("/dashboard/edit")
 
@@ -3395,12 +3470,69 @@ async def check_spam(message):
         pass
 
 
+async def check_blocked_words(message):
+    cfg = blocked_words_config
+    if not cfg.get("enabled"):
+        return False
+    if not isinstance(message.author, discord.Member):
+        return False
+    if member_has_whitelist_role(message.author):
+        return False
+    whitelist_channels = {
+        str(cid) for cid in cfg.get("whitelist_channels", []) or []
+    }
+    if str(message.channel.id) in whitelist_channels:
+        return False
+    found = find_blocked_word(message.content or "")
+    if found is None:
+        return False
+    delete = cfg.get("delete_message", True)
+    if delete:
+        try:
+            await message.delete(reason=f"Blocked word: {found}")
+        except discord.HTTPException as exc:
+            print(f"blockword: could not delete message: {exc}")
+    minutes = int(cfg.get("timeout_minutes", 0) or 0)
+    timed_out = False
+    if minutes > 0:
+        try:
+            await message.author.timeout(
+                discord.utils.utcnow() + timedelta(minutes=minutes),
+                reason=f"Blocked word: {found}",
+            )
+            timed_out = True
+        except discord.Forbidden:
+            pass
+        except discord.HTTPException as exc:
+            print(f"blockword: could not timeout: {exc}")
+    if cfg.get("notify_user", True):
+        try:
+            embed = (
+                discord.Embed(
+                    title="Message removed",
+                    description=(
+                        f"Your message was removed because it contained "
+                        f"a blocked word: **{found}**."
+                        + (f"\nYou have also been timed out for {minutes} minutes." if timed_out else "")
+                        + "\n\nIf you believe this was a mistake, please contact a moderator."
+                    ),
+                    color=0xE74C3C,
+                )
+                .set_footer(text="FightLabMC.net")
+            )
+            await message.author.send(embed=embed)
+        except discord.HTTPException:
+            pass
+    return True
+
+
 @bot.event
 async def on_message(message):
     if message.author.bot:
         return
     if message.guild:
         await check_spam(message)
+        await check_blocked_words(message)
     ticket_record = get_ticket(message.channel.id)
     if not ticket_record:
         return
@@ -3620,7 +3752,7 @@ async def on_ready():
     load_autorole_config()
     load_dashboard_roles_config()
     load_allowrole_config()
-    load_verified()
+    load_blocked_words_config()
     print("Role-language map:", build_role_language_map())
     saved_status = load_saved_status()
     await bot.change_presence(
