@@ -980,6 +980,8 @@ async def timeout_remove(
             f"Failed to remove timeout: {exc}", ephemeral=True
         )
         return
+    await log_to_mod_log("timeout-remove", ctx.author, member, reason_text)
+    await dm_target(member, "un-timed out", reason_text, moderator=ctx.author)
     embed = (
         discord.Embed(
             title="Timeout Removed",
