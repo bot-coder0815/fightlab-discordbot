@@ -1,5 +1,8 @@
 {
   "mod_roles": [],
   "timeout_roles": [],
+  "kick_roles": [],
+  "ban_roles": [],
+  "mod_log_channel_id": "",
   "allow_admin": true
 }

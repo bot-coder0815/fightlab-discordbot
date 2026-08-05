@@ -167,6 +167,9 @@ ALLOWROLE_FILE = os.path.join(DATA_DIR, "allowrole.json")
 allowrole_config: dict = {
     "mod_roles": [],
     "timeout_roles": [],
+    "kick_roles": [],
+    "ban_roles": [],
+    "mod_log_channel_id": "",
     "allow_admin": True,
 }
 
@@ -189,6 +192,9 @@ def load_allowrole_config() -> None:
                 pass
     allowrole_config.setdefault("mod_roles", [])
     allowrole_config.setdefault("timeout_roles", [])
+    allowrole_config.setdefault("kick_roles", [])
+    allowrole_config.setdefault("ban_roles", [])
+    allowrole_config.setdefault("mod_log_channel_id", "")
     allowrole_config.setdefault("allow_admin", True)
 
 
@@ -200,6 +206,69 @@ def has_role_from(member: discord.Member, key: str) -> bool:
     role_ids = {str(r.id) for r in member.roles}
     allowed = {str(rid) for rid in allowrole_config.get(key, [])}
     return bool(role_ids & allowed)
+
+
+def get_mod_log_channel(guild) -> discord.TextChannel | None:
+    channel_id = allowrole_config.get("mod_log_channel_id", "")
+    if not channel_id:
+        return None
+    try:
+        channel = guild.get_channel(int(channel_id))
+    except (ValueError, TypeError):
+        channel = None
+    return channel if isinstance(channel, discord.TextChannel) else None
+
+
+async def log_to_mod_log(
+    action: str,
+    moderator: discord.Member,
+    target: discord.User | discord.Member,
+    reason: str | None,
+):
+    channel = get_mod_log_channel(moderator.guild)
+    if channel is None:
+        return
+    embed = (
+        discord.Embed(
+            title=f"Mod Log: {action.title()}",
+            color=0xE74C3C if action in ("ban", "kick") else 0xE67E22,
+            timestamp=discord.utils.utcnow(),
+        )
+        .add_field(name="Target", value=f"{target.mention} (`{target.id}`)", inline=False)
+        .add_field(name="Moderator", value=f"{moderator.mention} (`{moderator.id}`)", inline=False)
+        .add_field(name="Reason", value=reason or "No reason provided.", inline=False)
+        .set_footer(text="FightLabMC.net")
+    )
+    try:
+        await channel.send(embed=embed)
+    except discord.HTTPException as exc:
+        print(f"mod_log send failed: {exc}")
+
+
+async def dm_target(
+    target: discord.User | discord.Member,
+    action: str,
+    reason: str | None,
+    duration: str | None = None,
+):
+    desc = f"You have been **{action}**."
+    if duration:
+        desc += f"\n\n**Duration:** {duration}"
+    desc += f"\n\n**Reason:** {reason or 'No reason provided.'}"
+    title = "Banned" if action == "ban" else f"{action.title()}"
+    embed = (
+        discord.Embed(
+            title=f"Moderation: {title}",
+            description=desc,
+            color=0xE74C3C,
+            timestamp=discord.utils.utcnow(),
+        )
+        .set_footer(text="FightLabMC.net")
+    )
+    try:
+        await target.send(embed=embed)
+    except discord.HTTPException as exc:
+        print(f"mod_log DM to {target.id} failed: {exc}")
 
 
 def load_autorole_config() -> None:
@@ -760,6 +829,11 @@ async def timeout_add(
         str,
         description="Duration, e.g. 10m, 1h, 1d, 2w, 2w 3d 10m 4s",
     ),
+    reason: discord.Option(
+        str,
+        description="Reason for the timeout (optional)",
+        required=False,
+    ) = None,
 ):
     await ctx.defer(ephemeral=True)
     if not has_role_from(ctx.author, "timeout_roles"):
@@ -783,10 +857,12 @@ async def timeout_add(
             "You can't timeout the bot.", ephemeral=True
         )
         return
+    reason_text = reason or ""
     try:
         await member.timeout(
             discord.utils.utcnow() + td,
-            reason=f"Timeout by {ctx.author} ({duration})",
+            reason=f"Timeout by {ctx.author} ({duration})"
+            + (f" — {reason_text}" if reason_text else ""),
         )
     except discord.Forbidden:
         await ctx.followup.send(
@@ -798,11 +874,14 @@ async def timeout_add(
             f"Failed to timeout member: {exc}", ephemeral=True
         )
         return
+    await log_to_mod_log("timeout", ctx.author, member, reason_text)
+    await dm_target(member, "timed out", reason_text, duration=duration)
     embed = (
         discord.Embed(
             title="Member Timed Out",
             description=(
                 f"**{member.mention}** was timed out for **{duration}**."
+                + (f"\n\n**Reason:** {reason_text}" if reason_text else "")
             ),
             color=0xE74C3C,
             timestamp=discord.utils.utcnow(),
@@ -857,6 +936,11 @@ async def timeout_remove(
         discord.Member,
         description="Member to un-timeout",
     ),
+    reason: discord.Option(
+        str,
+        description="Reason for removing the timeout (optional)",
+        required=False,
+    ) = None,
 ):
     await ctx.defer(ephemeral=True)
     if not has_role_from(ctx.author, "timeout_roles"):
@@ -869,10 +953,12 @@ async def timeout_remove(
             f"**{member.mention}** is not currently timed out.", ephemeral=True
         )
         return
+    reason_text = reason or ""
     try:
         await member.timeout(
             None,
-            reason=f"Timeout removed by {ctx.author}",
+            reason=f"Timeout removed by {ctx.author}"
+            + (f" — {reason_text}" if reason_text else ""),
         )
     except discord.Forbidden:
         await ctx.followup.send(
@@ -889,6 +975,154 @@ async def timeout_remove(
             title="Timeout Removed",
             description=f"**{member.mention}**'s timeout has been removed.",
             color=0x2ECC71,
+            timestamp=discord.utils.utcnow(),
+        )
+        .set_footer(text="FightLabMC.net")
+    )
+    await ctx.followup.send(embed=embed, ephemeral=True)
+
+
+@bot.slash_command(
+    name="kick",
+    description="Kick a member from the server (Moderation)",
+)
+async def kick(
+    ctx: discord.ApplicationContext,
+    member: discord.Option(
+        discord.Member,
+        description="Member to kick",
+    ),
+    reason: discord.Option(
+        str,
+        description="Reason for the kick (optional)",
+        required=False,
+    ) = None,
+):
+    await ctx.defer(ephemeral=True)
+    if not has_role_from(ctx.author, "kick_roles"):
+        await ctx.followup.send(
+            "You don't have permission to use /kick.", ephemeral=True
+        )
+        return
+    if member.id == ctx.author.id:
+        await ctx.followup.send(
+            "You can't kick yourself.", ephemeral=True
+        )
+        return
+    if member.id == bot.user.id:
+        await ctx.followup.send(
+            "You can't kick the bot.", ephemeral=True
+        )
+        return
+    if member.top_role >= ctx.author.top_role and not ctx.author.guild_permissions.administrator:
+        await ctx.followup.send(
+            "You can't kick that member (higher or equal role).", ephemeral=True
+        )
+        return
+    reason_text = reason or ""
+    try:
+        await member.kick(
+            reason=f"Kick by {ctx.author}"
+            + (f" — {reason_text}" if reason_text else ""),
+        )
+    except discord.Forbidden:
+        await ctx.followup.send(
+            "I don't have permission to kick that member.", ephemeral=True
+        )
+        return
+    except discord.HTTPException as exc:
+        await ctx.followup.send(
+            f"Failed to kick member: {exc}", ephemeral=True
+        )
+        return
+    await log_to_mod_log("kick", ctx.author, member, reason_text)
+    await dm_target(member, "kicked", reason_text)
+    embed = (
+        discord.Embed(
+            title="Member Kicked",
+            description=(
+                f"**{member.mention}** has been kicked."
+                + (f"\n\n**Reason:** {reason_text}" if reason_text else "")
+            ),
+            color=0xE74C3C,
+            timestamp=discord.utils.utcnow(),
+        )
+        .set_footer(text="FightLabMC.net")
+    )
+    await ctx.followup.send(embed=embed, ephemeral=True)
+
+
+@bot.slash_command(
+    name="ban",
+    description="Ban a member from the server (Moderation)",
+)
+async def ban(
+    ctx: discord.ApplicationContext,
+    user: discord.Option(
+        discord.User,
+        description="User to ban (can be a member or user ID)",
+    ),
+    reason: discord.Option(
+        str,
+        description="Reason for the ban (optional)",
+        required=False,
+    ) = None,
+    delete_message_seconds: discord.Option(
+        int,
+        description="Delete message history of the last X seconds (0-604800, optional)",
+        required=False,
+    ) = 0,
+):
+    await ctx.defer(ephemeral=True)
+    if not has_role_from(ctx.author, "ban_roles"):
+        await ctx.followup.send(
+            "You don't have permission to use /ban.", ephemeral=True
+        )
+        return
+    if user.id == ctx.author.id:
+        await ctx.followup.send(
+            "You can't ban yourself.", ephemeral=True
+        )
+        return
+    if user.id == bot.user.id:
+        await ctx.followup.send(
+            "You can't ban the bot.", ephemeral=True
+        )
+        return
+    member = ctx.guild.get_member(user.id)
+    if member and member.top_role >= ctx.author.top_role and not ctx.author.guild_permissions.administrator:
+        await ctx.followup.send(
+            "You can't ban that member (higher or equal role).", ephemeral=True
+        )
+        return
+    reason_text = reason or ""
+    try:
+        await ctx.guild.ban(
+            user=user,
+            delete_message_seconds=delete_message_seconds or 0,
+            reason=f"Ban by {ctx.author}"
+            + (f" — {reason_text}" if reason_text else ""),
+        )
+    except discord.Forbidden:
+        await ctx.followup.send(
+            "I don't have permission to ban that user.", ephemeral=True
+        )
+        return
+    except discord.HTTPException as exc:
+        await ctx.followup.send(
+            f"Failed to ban user: {exc}", ephemeral=True
+        )
+        return
+    await log_to_mod_log("ban", ctx.author, user, reason_text)
+    await dm_target(user, "banned", reason_text)
+    embed = (
+        discord.Embed(
+            title="Member Banned",
+            description=(
+                f"**{user.mention}** has been banned."
+                + (f"\n\n**Reason:** {reason_text}" if reason_text else "")
+            ),
+            color=0xE74C3C,
             timestamp=discord.utils.utcnow(),
         )
         .set_footer(text="FightLabMC.net")
