@@ -31,6 +31,7 @@ TICKET_STAFF_ROLE_ID = os.getenv("TICKET_STAFF_ROLE_ID")
 TICKET_TOPICS_FILE = os.path.join(DATA_DIR, "ticket_topics.json")
 
 BASE_URL = os.getenv("BASE_URL", "http://localhost:8080")
+MINECRAFT_URL = os.getenv("MINECRAFT_URL", "http://localhost:8081")
 WEB_HOST = os.getenv("WEB_HOST", "0.0.0.0")
 WEB_PORT = int(os.getenv("WEB_PORT", "8080"))
 TRANSCRIPTS_DIR = os.path.join(DATA_DIR, "transcripts")
@@ -68,6 +69,17 @@ BUGS_DATA_FILE = os.path.join(DATA_DIR, "bugs_data.json")
 bugs_data: dict = {"counter": 0, "bugs": []}
 REPORTS_DATA_FILE = os.path.join(DATA_DIR, "reports_data.json")
 reports_data: dict = {"counter": 0, "reports": []}
+
+# --- Verify System --------------------------------------------------
+VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "change-me")
+VERIFY_ROLE_ID = int(os.getenv("VERIFY_ROLE_ID", "0") or 0)
+VERIFY_CODE_LENGTH = int(os.getenv("VERIFY_CODE_LENGTH", "6") or "6")
+VERIFY_CODE_LIFETIME = int(os.getenv("VERIFY_CODE_LIFETIME", "300") or "300")
+VERIFY_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+pending_codes: dict[str, dict] = {}  # code -> {uuid, name, discord_id, expires}
+verified: dict[str, dict] = {}  # uuid -> {discord_id, verified_at, name}
+VERIFIED_FILE = os.path.join(DATA_DIR, "verified.json")
 
 STATUS_DATA_FILE = os.path.join(DATA_DIR, "bot_status.json")
 DEFAULT_SAVED_STATUS = "online"
@@ -377,6 +389,23 @@ def load_invites_data():
 def save_invites_data():
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(invites_data, f, indent=2, ensure_ascii=False)
+
+
+def load_verified():
+    global verified
+    if os.path.exists(VERIFIED_FILE):
+        try:
+            with open(VERIFIED_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    verified = data
+        except Exception:
+            pass
+
+
+def save_verified():
+    with open(VERIFIED_FILE, "w", encoding="utf-8") as f:
+        json.dump(verified, f, indent=2, ensure_ascii=False)
 
 
 def get_user_stats(guild_id: int, user_id: int) -> dict:
@@ -795,6 +824,39 @@ async def invites(
         .set_footer(text="FightLabMC.net")
     )
     await ctx.respond(embed=embed)
+
+
+# --- Verify System --------------------------------------------------
+
+@bot.slash_command(
+    name="verify",
+    description="Verifiziere dich mit deinem Minecraft-Account",
+)
+async def verify(ctx: discord.ApplicationContext, code: discord.Option(str, description="Dein Verifizierungscode")):
+    code = (code or "").strip().upper()
+    if not code:
+        await ctx.respond("Bitte gib deinen Verifizierungscode ein.", ephemeral=True)
+        return
+    entry = pending_codes.pop(code, None)
+    if entry is None:
+        await ctx.respond("Ungültiger Code. Bitte prüfe deinen Code und versuche es erneut.", ephemeral=True)
+        return
+    if entry["expires"] < time.time():
+        await ctx.respond("Der Code ist abgelaufen. Bitte fordere einen neuen Code an.", ephemeral=True)
+        return
+    uuid = entry["uuid"]
+    verified[uuid] = {"discord_id": str(ctx.author.id), "verified_at": datetime.now(timezone.utc).isoformat(), "name": entry["name"]}
+    save_verified()
+    if VERIFY_ROLE_ID:
+        guild = ctx.guild
+        if guild:
+            role = guild.get_role(VERIFY_ROLE_ID)
+            if role and ctx.author and not ctx.author.guild_permissions.administrator:
+                try:
+                    await ctx.author.add_roles(role, reason="Verify")
+                except discord.HTTPException:
+                    pass
+    await ctx.respond(f"✅ Du wurdest erfolgreich verifiziert! Willkommen, {entry['name']}.", ephemeral=True)
 
 
 def parse_duration(text: str) -> timedelta | None:
@@ -1792,6 +1854,61 @@ async def handle_transcript(request):
         return web.Response(text=f.read(), content_type="text/html")
 
 
+async def handle_verify_code(request):
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"ok": False, "error": "bad json"}, status=400)
+    token = request.headers.get("X-Verify-Token")
+    if token != VERIFY_TOKEN:
+        return web.json_response({"ok": False, "error": "unauthorized"}, status=403)
+    uuid = body.get("uuid")
+    name = body.get("name")
+    code = body.get("code")
+    if not uuid or not name or not code:
+        return web.json_response({"ok": False, "error": "missing fields"}, status=400)
+    code = code.upper()
+    pending_codes[code] = {
+        "uuid": uuid,
+        "name": name,
+        "discord_id": None,
+        "expires": time.time() + VERIFY_CODE_LIFETIME,
+    }
+    return web.json_response({"ok": True})
+
+
+async def handle_verify_confirm(request):
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"ok": False, "error": "bad json"}, status=400)
+    token = request.headers.get("X-Verify-Token")
+    if token != VERIFY_TOKEN:
+        return web.json_response({"ok": False, "error": "unauthorized"}, status=403)
+    uuid = body.get("uuid")
+    name = body.get("name")
+    if not uuid or not name:
+        return web.json_response({"ok": False, "error": "missing fields"}, status=400)
+    verified[uuid] = {
+        "discord_id": body.get("discord_id"),
+        "verified_at": datetime.now(timezone.utc).isoformat(),
+        "name": name,
+    }
+    save_verified()
+    # Forward to Minecraft plugin so it can run reward commands.
+    try:
+        async with ClientSession() as session:
+            await session.post(
+                MINECRAFT_URL + "/verify/confirm",
+                json=body,
+                headers={"X-Verify-Token": VERIFY_TOKEN},
+                timeout=ClientTimeout(total=5),
+            )
+    except Exception as exc:
+        print("Verify forward to Minecraft failed:", exc)
+    return web.json_response({"ok": True})
+
+
 async def handle_health(request):
     settings_summary = {}
     for guild_id, settings in tickets_data.get("settings", {}).items():
@@ -2087,6 +2204,8 @@ async def web_server():
     app.router.add_get("/dashboard/edit", handle_dashboard_edit)
     app.router.add_post("/dashboard/save", handle_dashboard_save)
     app.router.add_get("/dashboard/logout", handle_dashboard_logout)
+    app.router.add_post("/verify/code", handle_verify_code)
+    app.router.add_post("/verify/confirm", handle_verify_confirm)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, WEB_HOST, WEB_PORT)
@@ -3501,6 +3620,7 @@ async def on_ready():
     load_autorole_config()
     load_dashboard_roles_config()
     load_allowrole_config()
+    load_verified()
     print("Role-language map:", build_role_language_map())
     saved_status = load_saved_status()
     await bot.change_presence(
